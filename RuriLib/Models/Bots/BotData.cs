@@ -1,9 +1,13 @@
-﻿using RuriLib.Logging;
+﻿using AngleSharp.Common;
+using AngleSharp.Text;
+using RuriLib.Helpers;
+using RuriLib.Logging;
 using RuriLib.Models.Configs;
 using RuriLib.Models.Data;
 using RuriLib.Models.Proxies;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 
 namespace RuriLib.Models.Bots
@@ -19,6 +23,7 @@ namespace RuriLib.Models.Bots
         public IBotLogger Logger { get; set; }
         public Random Random { get; }
         public CancellationToken CancellationToken { get; set; }
+        public AsyncLocker AsyncLocker { get; set; }
         public decimal CaptchaCredit { get; set; } = 0;
         public string ExecutionInfo { get; set; } = "IDLE";
 
@@ -73,6 +78,40 @@ namespace RuriLib.Models.Bots
             if (Logger != null)
             {
                 Logger.ExecutingBlock = label;
+            }
+        }
+
+        public void ResetState()
+        {
+            ExecutionInfo = "Retrying";
+            STATUS = "NONE";
+            SOURCE = string.Empty;
+            RAWSOURCE = Array.Empty<byte>();
+            ADDRESS = string.Empty;
+            RESPONSECODE = 0;
+            COOKIES.Clear();
+            HEADERS.Clear();
+            MarkedForCapture.Clear();
+
+            // We need to dispose of objects created in each retry, because jobs should
+            // only dispose of them after the bot has completed its work
+            DisposeObjectsExcept(new[] { "puppeteer", "puppeteerPage", "puppeteerFrame", "httpClient", "ironPyEngine" });
+        }
+
+        public void DisposeObjectsExcept(string[] except = null)
+        {
+            except ??= Array.Empty<string>();
+
+            foreach (var obj in Objects.Where(o => o.Value is IDisposable && !except.Contains(o.Key)))
+            {
+                try
+                {
+                    (obj.Value as IDisposable).Dispose();
+                }
+                catch
+                {
+
+                }
             }
         }
     }

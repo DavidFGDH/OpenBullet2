@@ -1,14 +1,11 @@
-﻿using CaptchaSharp;
-using CaptchaSharp.Enums;
+﻿using CaptchaSharp.Enums;
 using CaptchaSharp.Models;
 using RuriLib.Attributes;
-using RuriLib.Functions.Captchas;
 using RuriLib.Logging;
 using RuriLib.Models.Bots;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Net;
 using System.Threading.Tasks;
 
 namespace RuriLib.Blocks.Captchas
@@ -233,12 +230,12 @@ namespace RuriLib.Blocks.Captchas
                 {
                     Host = data.Proxy.Host,
                     Port = data.Proxy.Port,
-                    Type = Enum.Parse<ProxyType>(data.Proxy.Type.ToString()),
+                    Type = Enum.Parse<ProxyType>(data.Proxy.Type.ToString(), true),
                     Username = data.Proxy.Username,
                     Password = data.Proxy.Password,
                     UserAgent = userAgent,
-                    Cookies = RuriLib.Functions.Http.Http.GetAllCookies((CookieContainer)data.Objects["cookieContainer"])
-                        .Select(c => (c.Name, c.Value)).ToArray()
+                    Cookies = data.COOKIES
+                        .Select(c => (c.Key, c.Value)).ToArray()
                 }
                 : null;
         }

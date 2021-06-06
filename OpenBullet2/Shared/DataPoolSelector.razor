@@ -110,13 +110,14 @@
     
     private DataPoolType type = DataPoolType.Wordlist;
     private WordlistEntity selectedWordlist;
-    private List<string> wordlistTypes;
+    private List<string> wordlistTypes = new();
     private int uid = -1;
 
     protected override async Task OnInitializedAsync()
     {
         uid = await ((OBAuthenticationStateProvider)Auth).GetCurrentUserId();
         wordlistTypes = RuriLibSettings.Environment.WordlistTypes.Select(t => t.Name).ToList();
+        await InvokeAsync(StateHasChanged);
     }
 
     protected override async Task OnParametersSetAsync()

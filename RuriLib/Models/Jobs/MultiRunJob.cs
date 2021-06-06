@@ -1,6 +1,4 @@
-using IronPython.Compiler;
 using IronPython.Hosting;
-using IronPython.Runtime;
 using Microsoft.CodeAnalysis.Scripting;
 using RuriLib.Helpers.CSharp;
 using RuriLib.Helpers.Transpilers;
@@ -26,6 +24,11 @@ using System.Runtime.Loader;
 using System.Threading;
 using System.Threading.Tasks;
 using PuppeteerSharp;
+using RuriLib.Models.Data.Resources;
+using RuriLib.Models.Data.Resources.Options;
+using RuriLib.Helpers;
+using IronPython.Compiler;
+using IronPython.Runtime;
 
 namespace RuriLib.Models.Jobs
 {
@@ -63,6 +66,9 @@ namespace RuriLib.Models.Jobs
         private ProxyPool proxyPool;
         private Timer tickTimer;
         private dynamic globalVariables;
+        private Dictionary<string, ConfigResource> resources;
+        private HttpClient httpClient;
+        private AsyncLocker asyncLocker;
         private Timer proxyReloadTimer;
 
         // Instance properties and stats
@@ -154,6 +160,7 @@ namespace RuriLib.Models.Jobs
 
                 START:
                 token.ThrowIfCancellationRequested();
+                botData.ResetState();
 
                 try
                 {
@@ -243,21 +250,7 @@ namespace RuriLib.Models.Jobs
                     }
 
                     // Dispose all disposable objects
-                    foreach (var obj in botData.Objects.Where(o => o.Value is IDisposable))
-                    {
-                        // Do not dispose objects that are given to every bot or puppeteer
-                        if (obj.Key == "httpClient" || obj.Key == "ironPyEngine" || obj.Key == "puppeteer")
-                            continue;
-
-                        try
-                        {
-                            (obj.Value as IDisposable).Dispose();
-                        }
-                        catch
-                        {
-
-                        }
-                    }
+                    botData.DisposeObjectsExcept(new[] { "puppeteer", "puppeteerPage", "puppeteerFrame", "httpClient", "ironPyEngine" });
                 }
 
                 // Update captcha credit
@@ -413,8 +406,29 @@ namespace RuriLib.Models.Jobs
             if (wordlistType == null)
                 throw new NullReferenceException($"The wordlist type with name {DataPool.WordlistType} was not found in the Environment");
 
-            var client = new HttpClient();
+            resources = new();
 
+            // Resources will need to be disposed of
+            foreach (var opt in Config.Settings.DataSettings.Resources)
+            {
+                try
+                {
+                    resources[opt.Name] = opt switch
+                    {
+                        LinesFromFileResourceOptions x => new LinesFromFileResource(x),
+                        RandomLinesFromFileResourceOptions x => new RandomLinesFromFileResource(x),
+                        _ => throw new NotImplementedException()
+                    };
+                }
+                catch
+                {
+                    throw new Exception($"Could not create resource {opt.Name}");
+                }
+            }
+
+            globalVariables.Resources = resources;
+            httpClient = new();
+            asyncLocker = new();
             var runtime = Python.CreateRuntime();
             var pyengine = runtime.GetEngine("py");
             var pco = (PythonCompilerOptions)pyengine.GetCompilerOptions();
@@ -438,8 +452,9 @@ namespace RuriLib.Models.Jobs
                 };
 
                 input.BotData.Logger.Enabled = settings.RuriLibSettings.GeneralSettings.EnableBotLogging && Config.Mode != ConfigMode.DLL;
-                input.BotData.Objects.Add("httpClient", client); // Add the default HTTP client
+                input.BotData.Objects.Add("httpClient", httpClient); // Add the default HTTP client
                 input.BotData.Objects.Add("ironPyEngine", pyengine); // Add the IronPython engine
+                input.BotData.AsyncLocker = asyncLocker;
 
                 return input;
             });
@@ -471,6 +486,7 @@ namespace RuriLib.Models.Jobs
             {
                 StopTimers();
                 logger?.LogInfo(Id, "Execution stopped");
+                DisposeGlobals();
             }
         }
 
@@ -484,6 +500,7 @@ namespace RuriLib.Models.Jobs
             {
                 StopTimers();
                 logger?.LogInfo(Id, "Execution aborted");
+                DisposeGlobals();
             }
         }
 
@@ -696,6 +713,49 @@ namespace RuriLib.Models.Jobs
             if (Providers.GeneralSettings.VerboseMode)
             {
                 Console.WriteLine($"[{DateTime.Now}] {message}");
+            }
+        }
+
+        private void DisposeGlobals()
+        {
+            if (httpClient is not null)
+            {
+                try
+                {
+                    httpClient.Dispose();
+                }
+                catch
+                {
+
+                }
+            }
+
+            if (asyncLocker is not null)
+            {
+                try
+                {
+                    asyncLocker.Dispose();
+                }
+                catch
+                {
+
+                }
+            }
+
+            if (resources is not null)
+            {
+                foreach (var resource in resources.Where(r => r.Value is IDisposable)
+                    .Select(r => r.Value).Cast<IDisposable>())
+                {
+                    try
+                    {
+                        resource.Dispose();
+                    }
+                    catch
+                    {
+
+                    }
+                }
             }
         }
         #endregion

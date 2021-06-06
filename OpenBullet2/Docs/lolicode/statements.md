@@ -82,7 +82,7 @@ END
 ```
 ---
 ##### LOCK
-Very useful if you want to execute operations on global variables.
+Very useful if you want to execute synchronous operations on global variables.
 It makes sure that only 1 bot can enter a given piece of code at a time, so that multiple bots do not edit the same global variable at the same time.
 Often used in conjunction with TRY/CATCH.
 Example:
@@ -98,6 +98,22 @@ END
 END
 ```
 ---
+##### ACQUIRELOCK / RELEASELOCK
+Very useful if you want to execute asynchronous operations on global variables.
+It makes sure that only 1 bot can enter a given piece of code at a time, so that multiple bots do not edit the same global variable at the same time.
+You MUST use this in conjunction with TRY/CATCH/FINALLY.
+Example:
+```
+ACQUIRELOCK globals
+TRY
+// Do some async operation here
+CATCH
+throw; // Rethrow any exception
+FINALLY
+RELEASELOCK globals
+END
+```
+---
 ##### SET VAR/CAP
 Sets a string variable, and optionally also marks it for capture. Introduced for consistency with OB1.
 Example:
@@ -107,4 +123,21 @@ LOG myString
 
 SET CAP myCapture "capture"
 LOG myCapture
+```
+---
+##### TAKEONE
+Takes a single item from a resource. You can configure resources in Config Settings > Data > Resources.
+You need to provide the name of the resource and the name of the variable that will be created (of type `string`).
+Example:
+```
+TAKEONE FROM "resourceName" => "myString"
+LOG myString
+```
+---
+##### TAKE
+Takes a multiple items from a resource. You can configure resources in Config Settings > Data > Resources.
+You need to provide the name of the resource and the name of the variable that will be created (of type `List<string>`).
+Example:
+```
+TAKE 5 FROM "resourceName" => "myList"
 ```

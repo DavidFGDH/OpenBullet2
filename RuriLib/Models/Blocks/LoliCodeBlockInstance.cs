@@ -60,6 +60,20 @@ namespace RuriLib.Models.Blocks
         {
             Match match;
 
+            // (RESOURCES) TAKEONE
+            // TAKEONE FROM "MyResource" => "myString"
+            if ((match = Regex.Match(input, "TAKEONE FROM (\"[^\"]+\") => \"([^\"]+)\"")).Success)
+            {
+                return $"string {match.Groups[2].Value} = globals.Resources[{match.Groups[1].Value}].TakeOne();";
+            }
+
+            // (RESOURCES) TAKE
+            // TAKE 5 FROM "MyResource" => "myList"
+            if ((match = Regex.Match(input, "TAKE ([0-9]+) FROM (\"[^\"]+\") => \"([^\"]+)\"")).Success)
+            {
+                return $"List<string> {match.Groups[3].Value} = globals.Resources[{match.Groups[2].Value}].Take({match.Groups[1].Value});";
+            }
+
             // CODE LABEL
             // #MYLABEL => MYLABEL:
             if ((match = Regex.Match(input, $"^#({validTokenRegex})$")).Success)
@@ -86,7 +100,7 @@ namespace RuriLib.Models.Blocks
             if ((match = Regex.Match(input, $"^REPEAT (.+)$")).Success)
             {
                 var i = VariableNames.RandomName();
-                return $"for (var {i} = 0; {i} < {match.Groups[1].Value}; {i}++){System.Environment.NewLine}{{";
+                return $"for (var {i} = 0; {i} < ({match.Groups[1].Value}).AsInt(); {i}++){System.Environment.NewLine}{{";
             }
 
             // FOREACH
@@ -115,7 +129,7 @@ namespace RuriLib.Models.Blocks
             if ((match = Regex.Match(input, $"^WHILE (.+)$")).Success)
             {
                 var line = match.Groups[1].Value.Trim();
-                if (LoliCodeParser.KeyTypes.Any(t => line.StartsWith(t)))
+                if (LoliCodeParser.keyIdentifiers.Any(t => line.StartsWith(t)))
                 {
                     var keyType = LineParser.ParseToken(ref line);
                     var key = LoliCodeParser.ParseKey(ref line, keyType);
@@ -132,7 +146,7 @@ namespace RuriLib.Models.Blocks
             if ((match = Regex.Match(input, $"^IF (.+)$")).Success)
             {
                 var line = match.Groups[1].Value.Trim();
-                if (LoliCodeParser.KeyTypes.Any(t => line.StartsWith(t)))
+                if (LoliCodeParser.keyIdentifiers.Any(t => line.StartsWith(t)))
                 {
                     var keyType = LineParser.ParseToken(ref line);
                     var key = LoliCodeParser.ParseKey(ref line, keyType);
@@ -156,7 +170,7 @@ namespace RuriLib.Models.Blocks
             if ((match = Regex.Match(input, $"ELSE IF (.+)$")).Success)
             {
                 var line = match.Groups[1].Value.Trim();
-                if (LoliCodeParser.KeyTypes.Any(t => line.StartsWith(t)))
+                if (LoliCodeParser.keyIdentifiers.Any(t => line.StartsWith(t)))
                 {
                     var keyType = LineParser.ParseToken(ref line);
                     var key = LoliCodeParser.ParseKey(ref line, keyType);
@@ -182,11 +196,32 @@ namespace RuriLib.Models.Blocks
                 return $"}}{System.Environment.NewLine}catch{System.Environment.NewLine}{{";
             }
 
+            // FINALLY
+            // FINALLY => } finally {
+            if (input == "FINALLY")
+            {
+                return $"}}{System.Environment.NewLine}finally{System.Environment.NewLine}{{";
+            }
+
             // LOCK
             // LOCK globals => lock (globals) {
             if ((match = Regex.Match(input, $"^LOCK (.+)$")).Success)
             {
                 return $"lock({match.Groups[1].Value}){System.Environment.NewLine}{{";
+            }
+
+            // ACQUIRELOCK
+            // ACQUIRELOCK globals => await data.AsyncLocker.Acquire(nameof(globals), data.CancellationToken);
+            if ((match = Regex.Match(input, $"^ACQUIRELOCK (.+)$")).Success)
+            {
+                return $"await data.AsyncLocker.Acquire(nameof({match.Groups[1].Value}), data.CancellationToken);";
+            }
+
+            // RELEASELOCK
+            // RELEASELOCK globals => data.AsyncLocker.Release(nameof(globals));
+            if ((match = Regex.Match(input, $"^RELEASELOCK (.+)$")).Success)
+            {
+                return $"data.AsyncLocker.Release(nameof({match.Groups[1].Value}));";
             }
 
             // SET VAR
