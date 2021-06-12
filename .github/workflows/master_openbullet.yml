@@ -20,6 +20,7 @@ jobs:
       uses: actions/setup-dotnet@v1
       with:
         dotnet-version: '5.0.x'
+        include-prerelease: true
 
     - name: Build with dotnet
       run: dotnet build --configuration Release
@@ -52,5 +53,5 @@ jobs:
       with:
         app-name: 'openbullet'
         slot-name: 'production'
-        publish-profile: ${{ secrets.AzureAppService_PublishProfile_2e427514402e4e5ea31e5d24ef5d61ba }}
+        publish-profile: ${{ secrets.AzureAppService_PublishProfile_f6fbeeb1ea6f49be99983314ab2c83ad }}
         package: .
