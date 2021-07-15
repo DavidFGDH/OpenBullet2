@@ -53,5 +53,5 @@ jobs:
       with:
         app-name: 'openbullet'
         slot-name: 'production'
-        publish-profile: ${{ secrets.AzureAppService_PublishProfile_f6fbeeb1ea6f49be99983314ab2c83ad }}
+        publish-profile: ${{ secrets.AzureAppService_PublishProfile_a60e223c0f9a48db82c4f8f32362a3d9 }}
         package: .
