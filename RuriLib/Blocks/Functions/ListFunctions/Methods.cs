@@ -62,12 +62,15 @@ namespace RuriLib.Blocks.Functions.List
             return concat;
         }
 
-        [Block("Zips two lists into a single one", extraInfo = "For example [1,2] and [a,b] will be zipped into [1a,2b]")]
+        [Block("Zips two lists into a single one", 
+            extraInfo = "You can specify the format for joined elements. " +
+            "[0] is replaced with an element from the first list, and [1] with an element from the second list. " +
+            "For example if the format is [0][1], the lists [1,2] and [a,b] will be zipped into [1a,2b]")]
         public static List<string> ZipLists(BotData data, [Variable] List<string> list1, [Variable] List<string> list2,
-            bool fill = false, string fillString = "NULL")
+            bool fill = false, string fillString = "NULL", string format = "[0][1]")
         {
             List<string> zipped;
-            Func<string, string, string> zipFunc = (a, b) => a + b;
+            Func<string, string, string> zipFunc = (a, b) => format.Replace("[0]", a).Replace("[1]", b);
 
             if (fill)
             {
@@ -173,6 +176,30 @@ namespace RuriLib.Blocks.Functions.List
             data.Logger.LogHeader();
             data.Logger.Log("Split the list into a dictionary", LogColors.YellowGreen);
             return dict;
+        }
+
+        [Block("Gets the index of an element of a list", name = "Index Of")]
+        public static int ListIndexOf(BotData data, [Variable] List<string> list, string item, bool exactMatch = false,
+            bool caseSensitive = false)
+        {
+            var comparer = caseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+            var elem = list.FirstOrDefault(i => exactMatch
+                ? i.Equals(item, comparer)
+                : i.Contains(item, comparer));
+
+            data.Logger.LogHeader();
+
+            if (elem is null)
+            {
+                data.Logger.Log("Item not found in the list, returning -1", LogColors.YellowGreen);
+                return -1;
+            }
+            else
+            {
+                var index = list.IndexOf(elem);
+                data.Logger.Log($"Item found at index {index}", LogColors.YellowGreen);
+                return index;
+            }
         }
     }
 }

@@ -6,7 +6,6 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Net.WebSockets;
-using System.Text;
 using System.Threading.Tasks;
 using Websocket.Client;
 
@@ -22,7 +21,7 @@ namespace RuriLib.Blocks.Requests.WebSocket
             data.Logger.LogHeader();
 
             IWebProxy proxy = null;
-            if (data.UseProxy)
+            if (data.UseProxy && data.Proxy is not null)
             {
                 if (data.Proxy.Type != Models.Proxies.ProxyType.Http)
                 {

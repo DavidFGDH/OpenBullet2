@@ -36,6 +36,7 @@ namespace RuriLib.Models.Jobs
     {
         // Options
         public int Bots { get; set; } = 1;
+        public int BotLimit { get; init; } = 200;
         public int Skip { get; set; } = 0;
         public Config Config { get; set; }
         public DataPool DataPool { get; set; }
@@ -133,7 +134,7 @@ namespace RuriLib.Models.Jobs
 
         #region Work Function
         private Func<MultiRunInput, CancellationToken, Task<CheckResult>> workFunction =
-            new Func<MultiRunInput, CancellationToken, Task<CheckResult>>(async (input, token) =>
+            new(async (input, token) =>
             {
                 var botData = input.BotData;
                 botData.CancellationToken = token;
@@ -460,7 +461,9 @@ namespace RuriLib.Models.Jobs
             });
 
             parallelizer = ParallelizerFactory<MultiRunInput, CheckResult>
-                .Create(settings.RuriLibSettings.GeneralSettings.ParallelizerType, workItems, workFunction, Bots, DataPool.Size, Skip);
+                .Create(settings.RuriLibSettings.GeneralSettings.ParallelizerType, workItems, 
+                    workFunction, Bots, DataPool.Size, Skip, BotLimit);
+
             parallelizer.CPMLimit = Config.Settings.GeneralSettings.MaximumCPM;
             parallelizer.NewResult += DataProcessed;
             parallelizer.StatusChanged += StatusChanged;
@@ -530,7 +533,7 @@ namespace RuriLib.Models.Jobs
             => await proxyPool.ReloadAll(ShuffleProxies);
         #endregion
 
-        #region Wrappers for TaskManager methods
+        #region Wrappers for Parallelizer methods
         public async Task ChangeBots(int amount)
         {
             if (parallelizer != null)
@@ -541,7 +544,7 @@ namespace RuriLib.Models.Jobs
         }
         #endregion
 
-        #region Propagation of TaskManager events
+        #region Propagation of Parallelizer events
         private void PropagateTaskError(object sender, ErrorDetails<MultiRunInput> details)
         {
             OnTaskError?.Invoke(sender, details);

@@ -24,6 +24,7 @@ namespace RuriLib.Http
     {
         private readonly ProxyClient proxyClient;
 
+        private TcpClient tcpClient;
         private Stream connectionCommonStream;
         private NetworkStream connectionNetworkStream;
 
@@ -42,6 +43,11 @@ namespace RuriLib.Http
         /// Allow automatic redirection on 3xx reply.
         /// </summary>
         public bool AllowAutoRedirect { get; set; } = true;
+
+        /// <summary>
+        /// The maximum number of times a request will be redirected.
+        /// </summary>
+        public int MaxNumberOfRedirects { get; set; } = 8;
 
         /// <summary>
         /// Whether to read the content of the response. Set to false if you're only interested
@@ -129,9 +135,18 @@ namespace RuriLib.Http
         /// Asynchronously sends a <paramref name="request"/> and returns an <see cref="HttpResponseMessage"/>.
         /// </summary>
         /// <param name="cancellationToken">A cancellation token to cancel the operation</param>
-        protected async override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,
             CancellationToken cancellationToken = default)
+            => SendAsync(request, 0, cancellationToken);
+
+        private async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,
+            int redirects, CancellationToken cancellationToken = default)
         {
+            if (redirects > MaxNumberOfRedirects)
+            {
+                throw new Exception("Maximum number of redirects exceeded");
+            }
+
             if (request == null)
             {
                 throw new ArgumentNullException(nameof(request));
@@ -144,45 +159,63 @@ namespace RuriLib.Http
 
             await CreateConnection(request, cancellationToken).ConfigureAwait(false);
             await SendDataAsync(request, cancellationToken).ConfigureAwait(false);
+            
             var responseMessage = await ReceiveDataAsync(request, cancellationToken).ConfigureAwait(false);
 
-            // Optionally perform auto redirection on 3xx response
-            if (((int)responseMessage.StatusCode) / 100 == 3 && AllowAutoRedirect)
+            try
             {
-                // Compute the redirection URI
-                var redirectUri = responseMessage.Headers.Location.IsAbsoluteUri
-                    ? responseMessage.Headers.Location
-                    : new Uri(request.RequestUri, responseMessage.Headers.Location);
-
-                // If not 307, change the method to GET
-                if (responseMessage.StatusCode != HttpStatusCode.RedirectKeepVerb)
+                // Optionally perform auto redirection on 3xx response
+                if (((int)responseMessage.StatusCode) / 100 == 3 && AllowAutoRedirect)
                 {
-                    request.Method = HttpMethod.Get;
-                    request.Content = null;
-                }
-
-                // Port over the cookies if the domains are different
-                if (request.RequestUri.Host != redirectUri.Host)
-                {
-                    var cookies = CookieContainer.GetCookies(request.RequestUri);
-                    foreach (Cookie cookie in cookies)
+                    if (!responseMessage.Headers.Contains("Location"))
                     {
-                        CookieContainer.Add(redirectUri, new Cookie(cookie.Name, cookie.Value));
+                        throw new Exception($"Status code was {(int)responseMessage.StatusCode} but no Location header received. " +
+                            $"Disable auto redirect and try again.");
                     }
 
-                    // This is needed otherwise if the Host header was set manually
-                    // it will keep the previous one after a domain switch
-                    request.Headers.Host = string.Empty;
+                    // Compute the redirection URI
+                    var redirectUri = responseMessage.Headers.Location.IsAbsoluteUri
+                        ? responseMessage.Headers.Location
+                        : new Uri(request.RequestUri, responseMessage.Headers.Location);
 
-                    // Remove additional headers that could cause trouble
-                    request.Headers.Remove("Origin");
+                    // If not 307, change the method to GET
+                    if (responseMessage.StatusCode != HttpStatusCode.RedirectKeepVerb)
+                    {
+                        request.Method = HttpMethod.Get;
+                        request.Content = null;
+                    }
+
+                    // Port over the cookies if the domains are different
+                    if (request.RequestUri.Host != redirectUri.Host)
+                    {
+                        var cookies = CookieContainer.GetCookies(request.RequestUri);
+                        foreach (Cookie cookie in cookies)
+                        {
+                            CookieContainer.Add(redirectUri, new Cookie(cookie.Name, cookie.Value));
+                        }
+
+                        // This is needed otherwise if the Host header was set manually
+                        // it will keep the previous one after a domain switch
+                        request.Headers.Host = string.Empty;
+
+                        // Remove additional headers that could cause trouble
+                        request.Headers.Remove("Origin");
+                    }
+
+                    // Set the new URI
+                    request.RequestUri = redirectUri;
+
+                    // Dispose the previous response
+                    responseMessage.Dispose();
+
+                    // Perform a new request
+                    return await SendAsync(request, redirects + 1, cancellationToken).ConfigureAwait(false);
                 }
-
-                // Set the new URI
-                request.RequestUri = redirectUri;
-
-                // Perform a new request
-                return await SendAsync(request, cancellationToken).ConfigureAwait(false);
+            }
+            catch
+            {
+                responseMessage.Dispose();
+                throw;
             }
 
             return responseMessage;
@@ -224,9 +257,14 @@ namespace RuriLib.Http
 
         private async Task CreateConnection(HttpRequestMessage request, CancellationToken cancellationToken)
         {
+            // Dispose of any previous connection (if we're coming from a redirect)
+            tcpClient?.Close();
+            connectionCommonStream?.Dispose();
+            connectionNetworkStream?.Dispose();
+
             // Get the stream from the proxies TcpClient
             var uri = request.RequestUri;
-            var tcpClient = await proxyClient.ConnectAsync(uri.Host, uri.Port, null, cancellationToken);
+            tcpClient = await proxyClient.ConnectAsync(uri.Host, uri.Port, null, cancellationToken);
             connectionNetworkStream = tcpClient.GetStream();
 
             // If https, set up a TLS stream
@@ -234,8 +272,7 @@ namespace RuriLib.Http
             {
                 try
                 {
-                    SslStream sslStream;
-                    sslStream = new SslStream(connectionNetworkStream, false, ServerCertificateCustomValidationCallback);
+                    var sslStream = new SslStream(connectionNetworkStream, false, ServerCertificateCustomValidationCallback);
 
                     var sslOptions = new SslClientAuthenticationOptions
                     {
@@ -255,8 +292,8 @@ namespace RuriLib.Http
                         sslOptions.CipherSuitesPolicy = new CipherSuitesPolicy(AllowedCipherSuites);
                     }
 
-                    await sslStream.AuthenticateAsClientAsync(sslOptions, cancellationToken);
                     connectionCommonStream = sslStream;
+                    await sslStream.AuthenticateAsClientAsync(sslOptions, cancellationToken);
                 }
                 catch (Exception ex)
                 {
@@ -278,6 +315,7 @@ namespace RuriLib.Http
         {
             if (disposing)
             {
+                tcpClient?.Dispose();
                 connectionCommonStream?.Dispose();
                 connectionNetworkStream?.Dispose();
             }

@@ -23,6 +23,7 @@ namespace RuriLib.Http
     {
         private readonly ProxyClient proxyClient;
 
+        private TcpClient tcpClient;
         private Stream connectionCommonStream;
         private NetworkStream connectionNetworkStream;
 
@@ -45,7 +46,7 @@ namespace RuriLib.Http
         /// <summary>
         /// The maximum number of times a request will be redirected.
         /// </summary>
-        public int MaxNumberOfRedirects { get; set; }
+        public int MaxNumberOfRedirects { get; set; } = 8;
 
         /// <summary>
         /// Whether to read the content of the response. Set to false if you're only interested
@@ -122,8 +123,11 @@ namespace RuriLib.Http
         /// Asynchronously sends a <paramref name="request"/> and returns an <see cref="HttpResponse"/>.
         /// </summary>
         /// <param name="cancellationToken">A cancellation token to cancel the operation</param>
-        public async Task<HttpResponse> SendAsync(HttpRequest request,
-            CancellationToken cancellationToken = default, int redirects = 0)
+        public Task<HttpResponse> SendAsync(HttpRequest request, CancellationToken cancellationToken = default)
+            => SendAsync(request, 0, cancellationToken);
+
+        private async Task<HttpResponse> SendAsync(HttpRequest request, int redirects,
+            CancellationToken cancellationToken = default)
         {
             if (redirects > MaxNumberOfRedirects)
             {
@@ -137,47 +141,65 @@ namespace RuriLib.Http
 
             await CreateConnection(request, cancellationToken).ConfigureAwait(false);
             await SendDataAsync(request, cancellationToken).ConfigureAwait(false);
+
             var responseMessage = await ReceiveDataAsync(request, cancellationToken).ConfigureAwait(false);
 
-            // Optionally perform auto redirection on 3xx response
-            if (((int)responseMessage.StatusCode) / 100 == 3 && AllowAutoRedirect)
+            try
             {
-                // Compute the redirection URI
-                var locationHeaderName = responseMessage.Headers.Keys
-                    .First(k => k.Equals("Location", StringComparison.OrdinalIgnoreCase));
-
-                Uri.TryCreate(responseMessage.Headers[locationHeaderName], UriKind.RelativeOrAbsolute, out var newLocation);
-
-                var redirectUri = newLocation.IsAbsoluteUri
-                    ? newLocation
-                    : new Uri(request.Uri, newLocation);
-
-                // If not 307, change the method to GET
-                if (responseMessage.StatusCode != HttpStatusCode.RedirectKeepVerb)
+                // Optionally perform auto redirection on 3xx response
+                if (((int)responseMessage.StatusCode) / 100 == 3 && AllowAutoRedirect)
                 {
-                    request.Method = HttpMethod.Get;
-                    request.Content = null;
-                }
+                    // Compute the redirection URI
+                    var locationHeaderName = responseMessage.Headers.Keys
+                        .FirstOrDefault(k => k.Equals("Location", StringComparison.OrdinalIgnoreCase));
 
-                // Adjust the request if the host is different
-                if (request.Uri.Host != redirectUri.Host)
-                {
-                    // This is needed otherwise if the Host header was set manually
-                    // it will keep the previous one after a domain switch
-                    if (request.HeaderExists("Host", out var hostHeaderName))
+                    if (locationHeaderName is null)
                     {
-                        request.Headers.Remove(hostHeaderName);
+                        throw new Exception($"Status code was {(int)responseMessage.StatusCode} but no Location header received. " +
+                            $"Disable auto redirect and try again.");
                     }
 
-                    // Remove additional headers that could cause trouble
-                    request.Headers.Remove("Origin");
+                    Uri.TryCreate(responseMessage.Headers[locationHeaderName], UriKind.RelativeOrAbsolute, out var newLocation);
+
+                    var redirectUri = newLocation.IsAbsoluteUri
+                        ? newLocation
+                        : new Uri(request.Uri, newLocation);
+
+                    // If not 307, change the method to GET
+                    if (responseMessage.StatusCode != HttpStatusCode.RedirectKeepVerb)
+                    {
+                        request.Method = HttpMethod.Get;
+                        request.Content = null;
+                    }
+
+                    // Adjust the request if the host is different
+                    if (request.Uri.Host != redirectUri.Host)
+                    {
+                        // This is needed otherwise if the Host header was set manually
+                        // it will keep the previous one after a domain switch
+                        if (request.HeaderExists("Host", out var hostHeaderName))
+                        {
+                            request.Headers.Remove(hostHeaderName);
+                        }
+
+                        // Remove additional headers that could cause trouble
+                        request.Headers.Remove("Origin");
+                    }
+
+                    // Set the new URI
+                    request.Uri = redirectUri;
+
+                    // Dispose the previous response
+                    responseMessage.Dispose();
+
+                    // Perform a new request
+                    return await SendAsync(request, redirects + 1, cancellationToken).ConfigureAwait(false);
                 }
-
-                // Set the new URI
-                request.Uri = redirectUri;
-
-                // Perform a new request
-                return await SendAsync(request, cancellationToken, redirects++).ConfigureAwait(false);
+            }
+            catch
+            {
+                responseMessage.Dispose();
+                throw;
             }
 
             return responseMessage;
@@ -197,9 +219,14 @@ namespace RuriLib.Http
 
         private async Task CreateConnection(HttpRequest request, CancellationToken cancellationToken)
         {
+            // Dispose of any previous connection (if we're coming from a redirect)
+            tcpClient?.Close();
+            connectionCommonStream?.Dispose();
+            connectionNetworkStream?.Dispose();
+
             // Get the stream from the proxies TcpClient
             var uri = request.Uri;
-            var tcpClient = await proxyClient.ConnectAsync(uri.Host, uri.Port, null, cancellationToken);
+            tcpClient = await proxyClient.ConnectAsync(uri.Host, uri.Port, null, cancellationToken);
             connectionNetworkStream = tcpClient.GetStream();
 
             // If https, set up a TLS stream
@@ -207,8 +234,7 @@ namespace RuriLib.Http
             {
                 try
                 {
-                    SslStream sslStream;
-                    sslStream = new SslStream(connectionNetworkStream, false, ServerCertificateCustomValidationCallback);
+                    var sslStream = new SslStream(connectionNetworkStream, false, ServerCertificateCustomValidationCallback);
 
                     var sslOptions = new SslClientAuthenticationOptions
                     {
@@ -228,8 +254,8 @@ namespace RuriLib.Http
                         sslOptions.CipherSuitesPolicy = new CipherSuitesPolicy(AllowedCipherSuites);
                     }
 
-                    await sslStream.AuthenticateAsClientAsync(sslOptions, cancellationToken);
                     connectionCommonStream = sslStream;
+                    await sslStream.AuthenticateAsClientAsync(sslOptions, cancellationToken);
                 }
                 catch (Exception ex)
                 {
@@ -249,6 +275,7 @@ namespace RuriLib.Http
 
         public void Dispose()
         {
+            tcpClient?.Dispose();
             connectionCommonStream?.Dispose();
             connectionNetworkStream?.Dispose();
         }

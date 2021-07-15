@@ -7,7 +7,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Threading;
+using System.Text;
 using System.Threading.Tasks;
 
 namespace RuriLib.Blocks.Utility.Files
@@ -18,6 +18,7 @@ namespace RuriLib.Blocks.Utility.Files
         [Block("Checks if a file exists")]
         public static bool FileExists(BotData data, string path)
         {
+            path = SanitizePath(path);
             var exists = ExecuteFileOperation(data, path, true, (p, c) =>
             {
                 return Task.FromResult(File.Exists(p));
@@ -30,11 +31,12 @@ namespace RuriLib.Blocks.Utility.Files
 
         #region Read File
         [Block("Reads the entire content of a file to a single string")]
-        public static async Task<string> FileRead(BotData data, string path)
+        public static async Task<string> FileRead(BotData data, string path, FileEncoding encoding = FileEncoding.UTF8)
         {
+            path = SanitizePath(path);
             var text = await ExecuteFileOperation(data, path, true, async (p, c) =>
             {
-                return await File.ReadAllTextAsync(p, data.CancellationToken);
+                return await File.ReadAllTextAsync(p, MapEncoding(encoding), data.CancellationToken);
             });
 
             data.Logger.LogHeader();
@@ -43,11 +45,12 @@ namespace RuriLib.Blocks.Utility.Files
         }
 
         [Block("Reads all lines of a file")]
-        public static async Task<List<string>> FileReadLines(BotData data, string path)
+        public static async Task<List<string>> FileReadLines(BotData data, string path, FileEncoding encoding = FileEncoding.UTF8)
         {
+            path = SanitizePath(path);
             var lines = await ExecuteFileOperation(data, path, true, async (p, c) =>
             {
-                return await File.ReadAllLinesAsync(p, data.CancellationToken);
+                return await File.ReadAllLinesAsync(p, MapEncoding(encoding), data.CancellationToken);
             });
 
             data.Logger.LogHeader();
@@ -58,6 +61,7 @@ namespace RuriLib.Blocks.Utility.Files
         [Block("Reads all bytes of a file")]
         public static async Task<byte[]> FileReadBytes(BotData data, string path)
         {
+            path = SanitizePath(path);
             var bytes = await ExecuteFileOperation(data, path, true, async (p, c) =>
             {
                 return await File.ReadAllBytesAsync(p, data.CancellationToken);
@@ -72,11 +76,13 @@ namespace RuriLib.Blocks.Utility.Files
         #region Write File
         [Block("Writes a string to a file",
             extraInfo = "The file will be created if it doesn't exist and all its previous content will be overwritten")]
-        public static async Task FileWrite(BotData data, string path, [Interpolated] string content)
+        public static async Task FileWrite(BotData data, string path, [Interpolated] string content,
+            FileEncoding encoding = FileEncoding.UTF8)
         {
+            path = SanitizePath(path);
             await ExecuteFileOperation(data, path, content, async (p, c) => 
             { 
-                await File.WriteAllTextAsync(p, c.Unescape(), data.CancellationToken);
+                await File.WriteAllTextAsync(p, c.Unescape(), MapEncoding(encoding), data.CancellationToken);
                 return true; 
             }, isWriteOperation: true);
 
@@ -86,11 +92,13 @@ namespace RuriLib.Blocks.Utility.Files
 
         [Block("Writes lines to a file",
             extraInfo = "The file will be created if it doesn't exist and all its previous content will be overwritten")]
-        public static async Task FileWriteLines(BotData data, string path, [Variable] List<string> lines)
+        public static async Task FileWriteLines(BotData data, string path, [Variable] List<string> lines,
+            FileEncoding encoding = FileEncoding.UTF8)
         {
+            path = SanitizePath(path);
             await ExecuteFileOperation(data, path, lines, async (p, c) =>
             {
-                await File.WriteAllLinesAsync(p, c, data.CancellationToken);
+                await File.WriteAllLinesAsync(p, c, MapEncoding(encoding), data.CancellationToken);
                 return true;
             }, isWriteOperation: true);
 
@@ -102,6 +110,7 @@ namespace RuriLib.Blocks.Utility.Files
             extraInfo = "The file will be created if it doesn't exist and all its previous content will be overwritten")]
         public static async Task FileWriteBytes(BotData data, string path, [Variable] byte[] content)
         {
+            path = SanitizePath(path);
             await ExecuteFileOperation(data, path, content, async (p, c) =>
             {
                 await File.WriteAllBytesAsync(p, c, data.CancellationToken);
@@ -115,11 +124,13 @@ namespace RuriLib.Blocks.Utility.Files
 
         #region Append File
         [Block("Appends a string at the end of a file")]
-        public static async Task FileAppend(BotData data, string path, [Interpolated] string content)
+        public static async Task FileAppend(BotData data, string path, [Interpolated] string content,
+            FileEncoding encoding = FileEncoding.UTF8)
         {
+            path = SanitizePath(path);
             await ExecuteFileOperation(data, path, content, async (p, c) =>
             {
-                await File.AppendAllTextAsync(p, c.Unescape(), data.CancellationToken);
+                await File.AppendAllTextAsync(p, c.Unescape(), MapEncoding(encoding), data.CancellationToken);
                 return true;
             }, isWriteOperation: true);
 
@@ -128,11 +139,13 @@ namespace RuriLib.Blocks.Utility.Files
         }
 
         [Block("Appends lines at the end of a file")]
-        public static async Task FileAppendLines(BotData data, string path, [Variable] List<string> lines)
+        public static async Task FileAppendLines(BotData data, string path, [Variable] List<string> lines,
+            FileEncoding encoding = FileEncoding.UTF8)
         {
+            path = SanitizePath(path);
             await ExecuteFileOperation(data, path, lines, async (p, c) =>
             {
-                await File.AppendAllLinesAsync(p, c, data.CancellationToken);
+                await File.AppendAllLinesAsync(p, c, MapEncoding(encoding), data.CancellationToken);
                 return true;
             }, isWriteOperation: true);
 
@@ -145,6 +158,9 @@ namespace RuriLib.Blocks.Utility.Files
         [Block("Copies a file to a new location")]
         public static void FileCopy(BotData data, string originPath, string destinationPath)
         {
+            originPath = SanitizePath(originPath);
+            destinationPath = SanitizePath(destinationPath);
+
             if (data.Providers.Security.RestrictBlocksToCWD)
             {
                 FileUtils.ThrowIfNotInCWD(originPath);
@@ -164,6 +180,9 @@ namespace RuriLib.Blocks.Utility.Files
         [Block("Moves a file to a new location")]
         public static void FileMove(BotData data, string originPath, string destinationPath)
         {
+            originPath = SanitizePath(originPath);
+            destinationPath = SanitizePath(destinationPath);
+
             if (data.Providers.Security.RestrictBlocksToCWD)
             {
                 FileUtils.ThrowIfNotInCWD(originPath);
@@ -183,6 +202,8 @@ namespace RuriLib.Blocks.Utility.Files
         [Block("Deletes a file")]
         public static void FileDelete(BotData data, string path)
         {
+            path = SanitizePath(path);
+
             if (data.Providers.Security.RestrictBlocksToCWD)
                 FileUtils.ThrowIfNotInCWD(path);
 
@@ -198,6 +219,8 @@ namespace RuriLib.Blocks.Utility.Files
         [Block("Checks if a folder exists")]
         public static bool FolderExists(BotData data, string path)
         {
+            path = SanitizePath(path);
+
             if (data.Providers.Security.RestrictBlocksToCWD)
                 FileUtils.ThrowIfNotInCWD(path);
 
@@ -210,6 +233,8 @@ namespace RuriLib.Blocks.Utility.Files
         [Block("Creates a directory in the given path")]
         public static void CreatePath(BotData data, string path)
         {
+            path = SanitizePath(path);
+
             if (data.Providers.Security.RestrictBlocksToCWD)
                 FileUtils.ThrowIfNotInCWD(path);
 
@@ -221,6 +246,8 @@ namespace RuriLib.Blocks.Utility.Files
         [Block("Gets the paths to all files in a specific folder")]
         public static List<string> GetFilesInFolder(BotData data, string path)
         {
+            path = SanitizePath(path);
+
             if (data.Providers.Security.RestrictBlocksToCWD)
                 FileUtils.ThrowIfNotInCWD(path);
 
@@ -233,6 +260,8 @@ namespace RuriLib.Blocks.Utility.Files
         [Block("Deletes a given directory")]
         public static void FolderDelete(BotData data, string path)
         {
+            path = SanitizePath(path);
+
             if (data.Providers.Security.RestrictBlocksToCWD)
                 FileUtils.ThrowIfNotInCWD(path);
 
@@ -289,5 +318,37 @@ namespace RuriLib.Blocks.Utility.Files
 
             return result;
         }
+
+        private static Encoding MapEncoding(FileEncoding encoding)
+            => encoding switch
+            {
+                FileEncoding.UTF8 => Encoding.UTF8,
+                FileEncoding.ASCII => Encoding.ASCII,
+                FileEncoding.Unicode => Encoding.Unicode,
+                FileEncoding.BigEndianUnicode => Encoding.BigEndianUnicode,
+                FileEncoding.UTF32 => Encoding.UTF32,
+                FileEncoding.Latin1 => Encoding.Latin1,
+                _ => throw new NotImplementedException()
+            };
+
+        private static string SanitizePath(string path)
+        {
+            foreach (var invalid in Path.GetInvalidPathChars())
+            {
+                path = path.Replace(invalid.ToString(), "");
+            }
+
+            return path;
+        }
+    }
+
+    public enum FileEncoding
+    {
+        UTF8,
+        ASCII,
+        Unicode,
+        BigEndianUnicode,
+        UTF32,
+        Latin1
     }
 }

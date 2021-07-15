@@ -23,7 +23,8 @@ namespace RuriLib.Parallelization
         #region Constructors
         /// <inheritdoc/>
         public TaskBasedParallelizer(IEnumerable<TInput> workItems, Func<TInput, CancellationToken, Task<TOutput>> workFunction,
-            int degreeOfParallelism, long totalAmount, int skip = 0) : base(workItems, workFunction, degreeOfParallelism, totalAmount, skip)
+            int degreeOfParallelism, long totalAmount, int skip = 0, int maxDegreeOfParallelism = 200)
+            : base(workItems, workFunction, degreeOfParallelism, totalAmount, skip, maxDegreeOfParallelism)
         {
 
         }
@@ -158,7 +159,7 @@ namespace RuriLib.Parallelization
                     if (dopDecreaseRequested || IsCPMLimited())
                     {
                         UpdateCPM();
-                        semaphore.Release();
+                        semaphore?.Release();
                         goto WAIT;
                     }
 
@@ -177,12 +178,12 @@ namespace RuriLib.Parallelization
                     {
                         // The task will release its slot no matter what
                         _ = taskFunction.Invoke(item)
-                            .ContinueWith(_ => semaphore.Release())
+                            .ContinueWith(_ => semaphore?.Release())
                             .ConfigureAwait(false);
                     }
                     else
                     {
-                        semaphore.Release();
+                        semaphore?.Release();
                     }
                 }
 
@@ -208,10 +209,11 @@ namespace RuriLib.Parallelization
             {
                 OnCompleted();
                 Status = ParallelizerStatus.Idle;
-                hardCTS.Dispose();
-                softCTS.Dispose();
-                semaphore.Dispose();
-                stopwatch.Stop();
+                hardCTS?.Dispose();
+                softCTS?.Dispose();
+                semaphore?.Dispose();
+                semaphore = null;
+                stopwatch?.Stop();
             }
         }
         #endregion
