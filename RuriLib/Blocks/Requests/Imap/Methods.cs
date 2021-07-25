@@ -11,8 +11,11 @@ using RuriLib.Logging;
 using RuriLib.Models.Bots;
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Net;
+using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using static RuriLib.Functions.Time.TimeConverter;
 
@@ -28,9 +31,12 @@ namespace RuriLib.Blocks.Requests.Imap
         {
             data.Logger.LogHeader();
 
-            var client = new ImapClient
+            var protocolLogger = InitLogger(data);
+
+            var client = new ImapClient(protocolLogger)
             {
-                Timeout = timeoutMilliseconds
+                Timeout = timeoutMilliseconds,
+                ServerCertificateValidationCallback = (s, c, h, e) => true
             };
 
             if (data.UseProxy && data.Proxy != null)
@@ -38,7 +44,7 @@ namespace RuriLib.Blocks.Requests.Imap
                 client.ProxyClient = MapProxyClient(data);
             }
 
-            data.Objects["imapClient"] = client;
+            data.SetObject("imapClient", client);
 
             var domain = email.Split('@')[1];
 
@@ -56,7 +62,6 @@ namespace RuriLib.Blocks.Requests.Imap
             }
 
             // Thunderbird autoconfig
-            data.Logger.Log("About to query thunderbird autoconfig", LogColors.YellowGreen);
             candidates.Clear();
             var thunderbirdUrl = $"{"https"}://live.mozillamessaging.com/autoconfig/v1.1/{domain}";
             try
@@ -81,7 +86,6 @@ namespace RuriLib.Blocks.Requests.Imap
             }
 
             // Site autoconfig
-            data.Logger.Log("About to query site autoconfig", LogColors.YellowGreen);
             candidates.Clear();
             var autoconfigUrl = $"{"https"}://autoconfig.{domain}/mail/config-v1.1.xml?emailaddress={email}";
             var autoconfigUrlUnsecure = $"{"http"}://autoconfig.{domain}/mail/config-v1.1.xml?emailaddress={email}";
@@ -117,7 +121,6 @@ namespace RuriLib.Blocks.Requests.Imap
             }
 
             // Site well-known
-            data.Logger.Log("About to query well-known autoconfig", LogColors.YellowGreen);
             candidates.Clear();
             var wellKnownUrl = $"{"https"}://{domain}/.well-known/autoconfig/mail/config-v1.1.xml";
             var wellKnownUrlUnsecure = $"{"http"}://{domain}/.well-known/autoconfig/mail/config-v1.1.xml";
@@ -152,8 +155,28 @@ namespace RuriLib.Blocks.Requests.Imap
                 }
             }
 
+            // Try the domain itself and possible subdomains
+            candidates.Clear();
+            candidates.Add(new HostEntry(domain, 993));
+            candidates.Add(new HostEntry(domain, 143));
+
+            foreach (var sub in subdomains)
+            {
+                candidates.Add(new HostEntry($"{sub}.{domain}", 993));
+                candidates.Add(new HostEntry($"{sub}.{domain}", 143));
+            }
+
+            foreach (var c in candidates)
+            {
+                var success = await TryConnect(data, client, domain, c);
+
+                if (success)
+                {
+                    return;
+                }
+            }
+
             // Try MX records
-            data.Logger.Log("About to query MX records", LogColors.YellowGreen);
             candidates.Clear();
             try
             {
@@ -169,28 +192,6 @@ namespace RuriLib.Blocks.Requests.Imap
             catch
             {
                 data.Logger.Log($"Failed to query the MX records", LogColors.DarkOrchid);
-            }
-
-            foreach (var c in candidates)
-            {
-                var success = await TryConnect(data, client, domain, c);
-
-                if (success)
-                {
-                    return;
-                }
-            }
-
-            // Try the domain itself and possible subdomains
-            data.Logger.Log("About to bruteforce subdomain", LogColors.YellowGreen);
-            candidates.Clear();
-            candidates.Add(new HostEntry(domain, 993));
-            candidates.Add(new HostEntry(domain, 143));
-
-            foreach (var sub in subdomains)
-            {
-                candidates.Add(new HostEntry($"{sub}.{domain}", 993));
-                candidates.Add(new HostEntry($"{sub}.{domain}", 143));
             }
 
             foreach (var c in candidates)
@@ -247,9 +248,12 @@ namespace RuriLib.Blocks.Requests.Imap
         {
             data.Logger.LogHeader();
 
-            var client = new ImapClient
+            var protocolLogger = InitLogger(data);
+
+            var client = new ImapClient(protocolLogger)
             {
-                Timeout = timeoutMilliseconds
+                Timeout = timeoutMilliseconds,
+                ServerCertificateValidationCallback = (s, c, h, e) => true
             };
 
             if (data.UseProxy && data.Proxy != null)
@@ -257,7 +261,7 @@ namespace RuriLib.Blocks.Requests.Imap
                 client.ProxyClient = MapProxyClient(data);
             }
 
-            data.Objects["imapClient"] = client;
+            data.SetObject("imapClient", client);
 
             await client.ConnectAsync(host, port, MailKit.Security.SecureSocketOptions.Auto, data.CancellationToken);
             data.Logger.Log($"Connected to {host} on port {port}. SSL/TLS: {client.IsSecure}", LogColors.DarkOrchid);
@@ -282,13 +286,16 @@ namespace RuriLib.Blocks.Requests.Imap
         }
 
         [Block("Logs into an account")]
-        public static async Task ImapLogin(BotData data, string email, string password, bool openInbox = true)
+        public static async Task ImapLogin(BotData data, string email, string password, bool openInbox = true, int timeoutMilliseconds = 10000)
         {
             data.Logger.LogHeader();
 
             var client = GetClient(data);
             client.AuthenticationMechanisms.Remove("XOAUTH2");
-            await client.AuthenticateAsync(email, password, data.CancellationToken);
+
+            using var cts = new CancellationTokenSource(timeoutMilliseconds);
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token, data.CancellationToken);
+            await client.AuthenticateAsync(email, password, linkedCts.Token);
             data.Logger.Log("Authenticated successfully", LogColors.DarkOrchid);
 
             if (openInbox)
@@ -296,6 +303,20 @@ namespace RuriLib.Blocks.Requests.Imap
                 await client.Inbox.OpenAsync(FolderAccess.ReadWrite, data.CancellationToken);
                 data.Logger.Log($"Opened the inbox, there are {client.Inbox.Count} total messages", LogColors.DarkOrchid);
             }
+        }
+
+        [Block("Gets the protocol log", name = "Get Imap Log")]
+        public static string ImapGetLog(BotData data)
+        {
+            data.Logger.LogHeader();
+
+            var protocolLogger = data.TryGetObject<ProtocolLogger>("imapLogger");
+            var bytes = (protocolLogger.Stream as MemoryStream).ToArray();
+            var log = Encoding.UTF8.GetString(bytes);
+
+            data.Logger.Log(log, LogColors.DarkOrchid);
+
+            return log;
         }
 
         [Block("Opens the inbox folder")]
@@ -393,16 +414,7 @@ Body:
         }
 
         private static ImapClient GetClient(BotData data)
-        {
-            try
-            {
-                return (ImapClient)data.Objects["imapClient"];
-            }
-            catch
-            {
-                throw new Exception("Connect the IMAP client first!");
-            }
-        }
+            => data.TryGetObject<ImapClient>("imapClient") ?? throw new Exception("Connect the IMAP client first!");
 
         private static ImapClient GetAuthenticatedClient(BotData data)
         {
@@ -464,5 +476,15 @@ Body:
             SearchField.Body => SearchTerm.BodyContains,
             _ => throw new NotImplementedException()
         };
+
+        private static ProtocolLogger InitLogger(BotData data)
+        {
+            var ms = new MemoryStream();
+            var protocolLogger = new ProtocolLogger(ms, true);
+            data.SetObject("imapLoggerStream", ms);
+            data.SetObject("imapLogger", protocolLogger);
+
+            return protocolLogger;
+        }
     }
 }

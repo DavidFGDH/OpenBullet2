@@ -18,6 +18,7 @@ using RuriLib.Extensions;
 using RuriLib.Functions.Networking;
 using MailKit;
 using System.Text;
+using System.Threading;
 
 namespace RuriLib.Blocks.Requests.Smtp
 {
@@ -31,10 +32,7 @@ namespace RuriLib.Blocks.Requests.Smtp
         {
             data.Logger.LogHeader();
 
-            var ms = new MemoryStream();
-            var protocolLogger = new ProtocolLogger(ms, true);
-            data.Objects["smtpLoggerStream"] = ms;
-            data.Objects["smtpLogger"] = protocolLogger;
+            var protocolLogger = InitLogger(data);
 
             var client = new SmtpClient(protocolLogger)
             {
@@ -47,7 +45,7 @@ namespace RuriLib.Blocks.Requests.Smtp
                 client.ProxyClient = MapProxyClient(data);
             }
 
-            data.Objects["smtpClient"] = client;
+            data.SetObject("smtpClient", client);
 
             var domain = email.Split('@')[1];
 
@@ -157,6 +155,29 @@ namespace RuriLib.Blocks.Requests.Smtp
                 }
             }
 
+            // Try the domain itself and possible subdomains
+            candidates.Clear();
+            candidates.Add(new HostEntry(domain, 465));
+            candidates.Add(new HostEntry(domain, 587));
+            candidates.Add(new HostEntry(domain, 25));
+
+            foreach (var sub in subdomains)
+            {
+                candidates.Add(new HostEntry($"{sub}.{domain}", 465));
+                candidates.Add(new HostEntry($"{sub}.{domain}", 587));
+                candidates.Add(new HostEntry($"{sub}.{domain}", 25));
+            }
+
+            foreach (var c in candidates)
+            {
+                var success = await TryConnect(data, client, domain, c);
+
+                if (success)
+                {
+                    return;
+                }
+            }
+
             // Try MX records
             candidates.Clear();
             try
@@ -174,29 +195,6 @@ namespace RuriLib.Blocks.Requests.Smtp
             catch
             {
                 data.Logger.Log($"Failed to query the MX records", LogColors.LightBrown);
-            }
-
-            foreach (var c in candidates)
-            {
-                var success = await TryConnect(data, client, domain, c);
-
-                if (success)
-                {
-                    return;
-                }
-            }
-
-            // Try the domain itself and possible subdomains
-            candidates.Clear();
-            candidates.Add(new HostEntry(domain, 465));
-            candidates.Add(new HostEntry(domain, 587));
-            candidates.Add(new HostEntry(domain, 25));
-
-            foreach (var sub in subdomains)
-            {
-                candidates.Add(new HostEntry($"{sub}.{domain}", 465));
-                candidates.Add(new HostEntry($"{sub}.{domain}", 587));
-                candidates.Add(new HostEntry($"{sub}.{domain}", 25));
             }
 
             foreach (var c in candidates)
@@ -261,9 +259,12 @@ namespace RuriLib.Blocks.Requests.Smtp
         {
             data.Logger.LogHeader();
 
-            var client = new SmtpClient
+            var protocolLogger = InitLogger(data);
+
+            var client = new SmtpClient(protocolLogger)
             {
-                Timeout = timeoutMilliseconds
+                Timeout = timeoutMilliseconds,
+                ServerCertificateValidationCallback = (s, c, h, e) => true
             };
 
             if (data.UseProxy && data.Proxy != null)
@@ -271,7 +272,7 @@ namespace RuriLib.Blocks.Requests.Smtp
                 client.ProxyClient = MapProxyClient(data);
             }
 
-            data.Objects["smtpClient"] = client;
+            data.SetObject("smtpClient", client);
 
             await client.ConnectAsync(host, port, MailKit.Security.SecureSocketOptions.Auto, data.CancellationToken);
             data.Logger.Log($"Connected to {host} on port {port}. SSL/TLS: {client.IsSecure}", LogColors.LightBrown);
@@ -296,14 +297,17 @@ namespace RuriLib.Blocks.Requests.Smtp
         }
 
         [Block("Logs into an account")]
-        public static async Task SmtpLogin(BotData data, string email, string password)
+        public static async Task SmtpLogin(BotData data, string email, string password, int timeoutMilliseconds = 10000)
         {
             data.Logger.LogHeader();
 
             var client = GetClient(data);
             using var logger = client.ProtocolLogger;
             client.AuthenticationMechanisms.Remove("XOAUTH2");
-            await client.AuthenticateAsync(email, password, data.CancellationToken);
+
+            using var cts = new CancellationTokenSource(timeoutMilliseconds);
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token, data.CancellationToken);
+            await client.AuthenticateAsync(email, password, linkedCts.Token);
             data.Logger.Log("Authenticated successfully", LogColors.LightBrown);
         }
 
@@ -312,7 +316,7 @@ namespace RuriLib.Blocks.Requests.Smtp
         {
             data.Logger.LogHeader();
 
-            var protocolLogger = (ProtocolLogger)data.Objects["smtpLogger"];
+            var protocolLogger = data.TryGetObject<ProtocolLogger>("smtpLogger");
             var bytes = (protocolLogger.Stream as MemoryStream).ToArray();
             var log = Encoding.UTF8.GetString(bytes);
 
@@ -386,16 +390,7 @@ namespace RuriLib.Blocks.Requests.Smtp
         }
 
         private static SmtpClient GetClient(BotData data)
-        {
-            try
-            {
-                return (SmtpClient)data.Objects["smtpClient"];
-            }
-            catch
-            {
-                throw new Exception("Connect the SMTP client first!");
-            }
-        }
+            => data.TryGetObject<SmtpClient>("smtpClient") ?? throw new Exception("Connect the SMTP client first!");
 
         private static SmtpClient GetAuthenticatedClient(BotData data)
         {
@@ -435,6 +430,16 @@ namespace RuriLib.Blocks.Requests.Smtp
                     _ => throw new NotImplementedException(),
                 };
             }
+        }
+
+        private static ProtocolLogger InitLogger(BotData data)
+        {
+            var ms = new MemoryStream();
+            var protocolLogger = new ProtocolLogger(ms, true);
+            data.SetObject("smtpLoggerStream", ms);
+            data.SetObject("smtpLogger", protocolLogger);
+
+            return protocolLogger;
         }
     }
 }

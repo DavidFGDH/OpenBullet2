@@ -1,4 +1,5 @@
-﻿using MailKit.Net.Pop3;
+﻿using MailKit;
+using MailKit.Net.Pop3;
 using MailKit.Net.Proxy;
 using RuriLib.Attributes;
 using RuriLib.Functions.Http;
@@ -13,6 +14,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace RuriLib.Blocks.Requests.Pop3
@@ -27,9 +30,12 @@ namespace RuriLib.Blocks.Requests.Pop3
         {
             data.Logger.LogHeader();
 
-            var client = new Pop3Client
+            var protocolLogger = InitLogger(data);
+
+            var client = new Pop3Client(protocolLogger)
             {
-                Timeout = timeoutMilliseconds
+                Timeout = timeoutMilliseconds,
+                ServerCertificateValidationCallback = (s, c, h, e) => true
             };
 
             if (data.UseProxy && data.Proxy != null)
@@ -37,7 +43,7 @@ namespace RuriLib.Blocks.Requests.Pop3
                 client.ProxyClient = MapProxyClient(data);
             }
 
-            data.Objects["pop3Client"] = client;
+            data.SetObject("pop3Client", client);
 
             var domain = email.Split('@')[1];
 
@@ -148,6 +154,27 @@ namespace RuriLib.Blocks.Requests.Pop3
                 }
             }
 
+            // Try the domain itself and possible subdomains
+            candidates.Clear();
+            candidates.Add(new HostEntry(domain, 995));
+            candidates.Add(new HostEntry(domain, 110));
+
+            foreach (var sub in subdomains)
+            {
+                candidates.Add(new HostEntry($"{sub}.{domain}", 995));
+                candidates.Add(new HostEntry($"{sub}.{domain}", 110));
+            }
+
+            foreach (var c in candidates)
+            {
+                var success = await TryConnect(data, client, domain, c);
+
+                if (success)
+                {
+                    return;
+                }
+            }
+
             // Try MX records
             candidates.Clear();
             try
@@ -164,27 +191,6 @@ namespace RuriLib.Blocks.Requests.Pop3
             catch
             {
                 data.Logger.Log($"Failed to query the MX records", LogColors.Mantis);
-            }
-
-            foreach (var c in candidates)
-            {
-                var success = await TryConnect(data, client, domain, c);
-
-                if (success)
-                {
-                    return;
-                }
-            }
-
-            // Try the domain itself and possible subdomains
-            candidates.Clear();
-            candidates.Add(new HostEntry(domain, 995));
-            candidates.Add(new HostEntry(domain, 110));
-
-            foreach (var sub in subdomains)
-            {
-                candidates.Add(new HostEntry($"{sub}.{domain}", 995));
-                candidates.Add(new HostEntry($"{sub}.{domain}", 110));
             }
 
             foreach (var c in candidates)
@@ -241,9 +247,12 @@ namespace RuriLib.Blocks.Requests.Pop3
         {
             data.Logger.LogHeader();
 
-            var client = new Pop3Client
+            var protocolLogger = InitLogger(data);
+
+            var client = new Pop3Client(protocolLogger)
             {
-                Timeout = timeoutMilliseconds
+                Timeout = timeoutMilliseconds,
+                ServerCertificateValidationCallback = (s, c, h, e) => true
             };
 
             if (data.UseProxy && data.Proxy != null)
@@ -251,7 +260,7 @@ namespace RuriLib.Blocks.Requests.Pop3
                 client.ProxyClient = MapProxyClient(data);
             }
 
-            data.Objects["pop3Client"] = client;
+            data.SetObject("pop3Client", client);
 
             await client.ConnectAsync(host, port, MailKit.Security.SecureSocketOptions.Auto, data.CancellationToken);
             data.Logger.Log($"Connected to {host} on port {port}. SSL/TLS: {client.IsSecure}", LogColors.Mantis);
@@ -276,14 +285,31 @@ namespace RuriLib.Blocks.Requests.Pop3
         }
 
         [Block("Logs into an account")]
-        public static async Task Pop3Login(BotData data, string email, string password)
+        public static async Task Pop3Login(BotData data, string email, string password, int timeoutMilliseconds = 10000)
         {
             data.Logger.LogHeader();
 
             var client = GetClient(data);
             client.AuthenticationMechanisms.Remove("XOAUTH2");
-            await client.AuthenticateAsync(email, password, data.CancellationToken);
+
+            using var cts = new CancellationTokenSource(timeoutMilliseconds);
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token, data.CancellationToken);
+            await client.AuthenticateAsync(email, password, linkedCts.Token);
             data.Logger.Log($"Authenticated successfully, there are {client.Count} total messages", LogColors.Mantis);
+        }
+
+        [Block("Gets the protocol log", name = "Get Pop3 Log")]
+        public static string Pop3GetLog(BotData data)
+        {
+            data.Logger.LogHeader();
+
+            var protocolLogger = data.TryGetObject<ProtocolLogger>("pop3Logger");
+            var bytes = (protocolLogger.Stream as MemoryStream).ToArray();
+            var log = Encoding.UTF8.GetString(bytes);
+
+            data.Logger.Log(log, LogColors.Mantis);
+
+            return log;
         }
 
         [Block("Gets a text (or HTML) representation of a mail at a specified index")]
@@ -353,16 +379,7 @@ Body:
         }
 
         private static Pop3Client GetClient(BotData data)
-        {
-            try
-            {
-                return (Pop3Client)data.Objects["pop3Client"];
-            }
-            catch
-            {
-                throw new Exception("Connect the POP3 client first!");
-            }
-        }
+            => data.TryGetObject<Pop3Client>("pop3Client") ?? throw new Exception("Connect the POP3 client first!");
 
         private static Pop3Client GetAuthenticatedClient(BotData data)
         {
@@ -402,6 +419,16 @@ Body:
                     _ => throw new NotImplementedException(),
                 };
             }
+        }
+
+        private static ProtocolLogger InitLogger(BotData data)
+        {
+            var ms = new MemoryStream();
+            var protocolLogger = new ProtocolLogger(ms, true);
+            data.SetObject("pop3LoggerStream", ms);
+            data.SetObject("pop3Logger", protocolLogger);
+
+            return protocolLogger;
         }
     }
 }

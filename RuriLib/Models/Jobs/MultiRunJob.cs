@@ -53,7 +53,7 @@ namespace RuriLib.Models.Jobs
         public Bots.Providers Providers { get; set; }
         public TimeSpan TickInterval = TimeSpan.FromMinutes(1);
         public Dictionary<string, string> CustomInputsAnswers { get; set; } = new Dictionary<string, string>();
-        public BotData[] CurrentBotDatas { get; set; } = new BotData[200];
+        public BotData[] CurrentBotDatas { get; set; }
 
         // Getters
         public override float Progress => parallelizer != null ? parallelizer.Progress : -1;
@@ -236,22 +236,14 @@ namespace RuriLib.Models.Jobs
                     botData.Logger.Log($"[{DateTime.Now.ToShortTimeString()}] BOT ENDED WITH STATUS: {botData.STATUS}");
 
                     // Close the browser if needed
-                    if (botData.ConfigSettings.PuppeteerSettings.QuitBrowserStatuses.Contains(botData.STATUS)
-                        && botData.Objects.ContainsKey("puppeteer"))
+                    if (botData.ConfigSettings.PuppeteerSettings.QuitBrowserStatuses.Contains(botData.STATUS))
                     {
-                        try
-                        {
-                            var browser = (Browser)botData.Objects["puppeteer"];
-                            await browser.CloseAsync();
-                        }
-                        catch
-                        {
-
-                        }
+                        botData.DisposeObjectsExcept(new[] { "httpClient", "ironPyEngine" });
                     }
-
-                    // Dispose all disposable objects
-                    botData.DisposeObjectsExcept(new[] { "puppeteer", "puppeteerPage", "puppeteerFrame", "httpClient", "ironPyEngine" });
+                    else
+                    {
+                        botData.DisposeObjectsExcept(new[] { "puppeteer", "puppeteerPage", "puppeteerFrame", "httpClient", "ironPyEngine" });
+                    }
                 }
 
                 // Update captcha credit
@@ -453,8 +445,8 @@ namespace RuriLib.Models.Jobs
                 };
 
                 input.BotData.Logger.Enabled = settings.RuriLibSettings.GeneralSettings.EnableBotLogging && Config.Mode != ConfigMode.DLL;
-                input.BotData.Objects.Add("httpClient", httpClient); // Add the default HTTP client
-                input.BotData.Objects.Add("ironPyEngine", pyengine); // Add the IronPython engine
+                input.BotData.SetObject("httpClient", httpClient); // Add the default HTTP client
+                input.BotData.SetObject("ironPyEngine", pyengine); // Add the IronPython engine
                 input.BotData.AsyncLocker = asyncLocker;
 
                 return input;
@@ -646,6 +638,11 @@ namespace RuriLib.Models.Jobs
             }
 
             Interlocked.Increment(ref dataTested);
+
+            if (parallelizer.Status == ParallelizerStatus.Stopping)
+            {
+                details.Item.BotData.ExecutionInfo = "STOPPED";
+            }
         }
 
         private async Task RegisterHit(CheckResult result)
