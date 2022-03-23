@@ -23,12 +23,15 @@ using System.Reflection;
 using System.Runtime.Loader;
 using System.Threading;
 using System.Threading.Tasks;
-using PuppeteerSharp;
 using RuriLib.Models.Data.Resources;
 using RuriLib.Models.Data.Resources.Options;
 using RuriLib.Helpers;
 using IronPython.Compiler;
 using IronPython.Runtime;
+using RuriLib.Models.Captchas;
+using RuriLib.Legacy.Models;
+using RuriLib.Legacy.LS;
+using RuriLib.Models.Variables;
 
 namespace RuriLib.Models.Jobs
 {
@@ -67,6 +70,8 @@ namespace RuriLib.Models.Jobs
         private ProxyPool proxyPool;
         private Timer tickTimer;
         private dynamic globalVariables;
+        private VariablesList legacyGlobalVariables;
+        private Dictionary<string, string> legacyGlobalCookies;
         private Dictionary<string, ConfigResource> resources;
         private HttpClient httpClient;
         private AsyncLocker asyncLocker;
@@ -81,8 +86,10 @@ namespace RuriLib.Models.Jobs
         public event EventHandler<Exception> OnError;
         public event EventHandler<float> OnProgress;
         public event EventHandler<JobStatus> OnStatusChanged;
+        public event EventHandler OnBotsChanged;
         public event EventHandler OnCompleted;
         public event EventHandler OnTimerTick;
+        public event EventHandler<Hit> OnHit;
 
         /*********
          * STATS *
@@ -154,10 +161,45 @@ namespace RuriLib.Models.Jobs
 
                 botData.CancellationToken = token;
                 ScriptState scriptState = null;
+                LSGlobals lsGlobals = null; // Legacy
+
+                if (input.IsLegacy)
+                {
+                    lsGlobals = new LSGlobals(botData)
+                    {
+                        Globals = input.LegacyGlobals,
+                        GlobalCookies = input.LegacyGlobalCookies
+                    };
+
+                    var slices = new List<Variable>();
+
+                    foreach (var slice in botData.Line.GetVariables())
+                    {
+                        var sliceValue = botData.ConfigSettings.DataSettings.UrlEncodeDataAfterSlicing
+                            ? Uri.EscapeDataString(slice.AsString())
+                            : slice.AsString();
+
+                        slices.Add(new StringVariable(sliceValue) { Name = slice.Name });
+                    }
+
+                    var legacyVariables = new VariablesList(slices);
+
+                    foreach (var customInput in botData.ConfigSettings.InputSettings.CustomInputs)
+                    {
+                        legacyVariables.Set(new StringVariable(customInput.DefaultAnswer) { Name = customInput.VariableName });
+                    }
+
+                    botData.SetObject("legacyVariables", legacyVariables);
+                }
+
                 Dictionary<string, object> outputVariables = new();
 
                 // Add this BotData to the array for detailed MultiRunJob display mode
-                input.Job.CurrentBotDatas[(int)(input.Index++ % input.Job.Bots)] = botData;
+                var botIndex = (int)(input.Index++ % input.Job.Bots);
+                input.Job.CurrentBotDatas[botIndex] = botData;
+
+                // Set the BOTNUM
+                botData.BOTNUM = botIndex + 1;
 
                 START:
                 token.ThrowIfCancellationRequested();
@@ -185,7 +227,7 @@ namespace RuriLib.Models.Jobs
                         {
                             if (input.Job.NoValidProxyBehaviour == NoValidProxyBehaviour.Reload)
                             {
-                                await input.ProxyPool.ReloadAll();
+                                await input.ProxyPool.ReloadAll().ConfigureAwait(false);
                             }
                             else if (input.Job.NoValidProxyBehaviour == NoValidProxyBehaviour.Unban)
                             {
@@ -202,19 +244,13 @@ namespace RuriLib.Models.Jobs
                     foreach (var answer in input.CustomInputsAnswers)
                         (scriptGlobals.input as IDictionary<string, object>).Add(answer.Key, answer.Value);
 
-                    botData.Logger.Log($"[{DateTime.Now.ToShortTimeString()}] BOT STARTED WITH DATA {botData.Line.Data} AND PROXY {botData.Proxy}");
+                    botData.Logger.Log($"[{DateTime.Now.ToLongTimeString()}] BOT STARTED WITH DATA {botData.Line.Data} AND PROXY {botData.Proxy}");
 
-                    // If it's not a DLL config, run the compiled script
-                    if (!input.IsDLL)
+                    // If it's a DLL config, invoke the method
+                    if (input.IsDLL)
                     {
-                        scriptState = await input.Script.RunAsync(scriptGlobals, null, token).ConfigureAwait(false);
-                        
-                    }
-                    // Otherwise invoke the method
-                    else
-                    {
-                        var task = (Task)input.DLLMethod.Invoke(null, new object[] 
-                        { 
+                        var task = (Task)input.DLLMethod.Invoke(null, new object[]
+                        {
                             botData,
                             scriptGlobals.input,
                             scriptGlobals.globals,
@@ -223,6 +259,28 @@ namespace RuriLib.Models.Jobs
                         });
 
                         await task.ConfigureAwait(false);
+                        
+                    }
+                    // If it's a legacy config, run the LoliScript engine
+                    else if (input.IsLegacy)
+                    {
+                        var loliScript = new LoliScript(input.LegacyLoliScript);
+
+                        do
+                        {
+                            if (botData.CancellationToken.IsCancellationRequested)
+                            {
+                                break;
+                            }
+
+                            await loliScript.TakeStep(lsGlobals);
+                        }
+                        while (loliScript.CanProceed);
+                    }
+                    // Otherwise run the compiled script
+                    else
+                    {
+                        scriptState = await input.Script.RunAsync(scriptGlobals, null, token).ConfigureAwait(false);
                     }
                 }
                 catch (Exception ex)
@@ -233,10 +291,12 @@ namespace RuriLib.Models.Jobs
                 }
                 finally
                 {
-                    botData.Logger.Log($"[{DateTime.Now.ToShortTimeString()}] BOT ENDED WITH STATUS: {botData.STATUS}");
+                    var endMessage = $"[{DateTime.Now.ToLongTimeString()}] BOT ENDED WITH STATUS: {botData.STATUS}";
+                    botData.ExecutingBlock(endMessage);
+                    botData.Logger.Log(endMessage);
 
                     // Close the browser if needed
-                    if (botData.ConfigSettings.PuppeteerSettings.QuitBrowserStatuses.Contains(botData.STATUS))
+                    if (botData.ConfigSettings.BrowserSettings.QuitBrowserStatuses.Contains(botData.STATUS))
                     {
                         botData.DisposeObjectsExcept(new[] { "httpClient", "ironPyEngine" });
                     }
@@ -281,6 +341,26 @@ namespace RuriLib.Models.Jobs
                 }
                 else if (botData.STATUS == "RETRY")
                 {
+                    if (botData.ConfigSettings.GeneralSettings.ReportLastCaptchaOnRetry)
+                    {
+                        var lastCaptcha = botData.TryGetObject<CaptchaInfo>("lastCaptchaInfo");
+
+                        if (lastCaptcha is not null)
+                        {
+                            try
+                            {
+                                botData.ExecutingBlock("Reporting bad captcha upon RETRY status");
+                                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                                await botData.Providers.Captcha.ReportSolution(lastCaptcha.Id, lastCaptcha.Type, false, cts.Token).ConfigureAwait(false);
+                                botData.ExecutingBlock("Bad captcha reported!");
+                            }
+                            catch
+                            {
+
+                            }
+                        }
+                    }
+
                     input.Job.DebugLog($"RETRY ({botData.Line.Data})({botData.Proxy})");
                     Interlocked.Increment(ref input.Job.dataRetried);
                     goto START;
@@ -303,9 +383,35 @@ namespace RuriLib.Models.Jobs
                     }
                 }
 
-                // If not a DLL config, retrieve the output variables from the script
-                if (!input.IsDLL && scriptState != null && !scriptState.Variables.IsDefault)
+                if (input.IsDLL)
                 {
+                    // No need to do anything here, DLL configs already fill the output variables
+                }
+                else if (input.IsLegacy)
+                {
+                    var legacyVariables = botData.TryGetObject<VariablesList>("legacyVariables");
+
+                    foreach (var variable in legacyVariables.Variables.Where(v => v.MarkedForCapture))
+                    {
+                        switch (variable.Type)
+                        {
+                            case VariableType.String:
+                                outputVariables[variable.Name] = variable.AsString();
+                                break;
+
+                            case VariableType.ListOfStrings:
+                                outputVariables[variable.Name] = variable.AsListOfStrings();
+                                break;
+
+                            case VariableType.DictionaryOfStrings:
+                                outputVariables[variable.Name] = variable.AsDictionaryOfStrings();
+                                break;
+                        }
+                    }
+                }
+                else if (scriptState != null && !scriptState.Variables.IsDefault)
+                {
+                    // Get the variables from the script
                     foreach (var variable in scriptState.Variables)
                     {
                         if (botData.MarkedForCapture.Contains(variable.Name))
@@ -327,155 +433,186 @@ namespace RuriLib.Models.Jobs
         #region Controls
         public override async Task Start()
         {
-            if (Config == null)
-                throw new NullReferenceException("The Config cannot be null");
+            if (Status is JobStatus.Starting or JobStatus.Running)
+                throw new Exception("Job already started");
 
-            if (DataPool == null)
-                throw new NullReferenceException("The DataPool cannot be null");
-
-            if (Skip >= DataPool.Size)
-                throw new ArgumentException("The skip must be smaller than the total number of lines in the data pool");
-
-            if (ShouldUseProxies(ProxyMode, Config.Settings.ProxySettings) && (ProxySources == null || ProxySources.Count == 0))
-                throw new NullReferenceException("The list of proxy sources cannot be null or empty when proxies are needed");
-
-            if (!Config.Settings.DataSettings.AllowedWordlistTypes.Contains(DataPool.WordlistType))
-                throw new NotSupportedException("This config does not support the provided Wordlist Type");
-
-            if (ShouldUseProxies(ProxyMode, Config.Settings.ProxySettings))
+            try
             {
-                // HACK: This should probably not be here, but it will work for now
-                ProxySources.ForEach(p => p.UserId = OwnerId);
+                Status = JobStatus.Starting;
 
-                var proxyPoolOptions = new ProxyPoolOptions { AllowedTypes = Config.Settings.ProxySettings.AllowedProxyTypes };
-                proxyPool = new ProxyPool(ProxySources, proxyPoolOptions);
-                await proxyPool.ReloadAll(ShuffleProxies);
+                if (Config == null)
+                    throw new NullReferenceException("The Config cannot be null");
 
-                if (!proxyPool.Proxies.Any())
+                if (DataPool == null)
+                    throw new NullReferenceException("The DataPool cannot be null");
+
+                if (Skip >= DataPool.Size)
+                    throw new ArgumentException("The skip must be smaller than the total number of lines in the data pool");
+
+                if (ShouldUseProxies(ProxyMode, Config.Settings.ProxySettings) && (ProxySources == null || ProxySources.Count == 0))
+                    throw new NullReferenceException("The list of proxy sources cannot be null or empty when proxies are needed");
+
+                if (!Config.Settings.DataSettings.AllowedWordlistTypes.Contains(DataPool.WordlistType))
+                    throw new NotSupportedException("This config does not support the provided Wordlist Type");
+
+                if (ShouldUseProxies(ProxyMode, Config.Settings.ProxySettings))
                 {
-                    throw new Exception("No proxies that respect the allowed types are available, but the job is set to use proxies");
-                }
-            }
+                    // HACK: This should probably not be here, but it will work for now
+                    ProxySources.ForEach(p => p.UserId = OwnerId);
 
-            // Wait for the start condition to be verified
-            await base.Start();
+                    var proxyPoolOptions = new ProxyPoolOptions { AllowedTypes = Config.Settings.ProxySettings.AllowedProxyTypes };
+                    proxyPool = new ProxyPool(ProxySources, proxyPoolOptions);
+                    await proxyPool.ReloadAll(ShuffleProxies).ConfigureAwait(false);
 
-            Script script = null;
-            MethodInfo method = null;
-
-            // If not in DLL mode, build the C# script and compile it
-            if (Config.Mode != ConfigMode.DLL)
-            {
-                switch (Config.Mode)
-                {
-                    case ConfigMode.Stack:
-                        Config.CSharpScript = Stack2CSharpTranspiler.Transpile(Config.Stack, Config.Settings);
-                        break;
-
-                    case ConfigMode.LoliCode:
-                        Config.CSharpScript = Loli2CSharpTranspiler.Transpile(Config.LoliCodeScript, Config.Settings);
-                        break;
-                }
-
-                script = new ScriptBuilder().Build(Config.CSharpScript, Config.Settings.ScriptSettings, pluginRepo);
-                script.Compile();
-            }
-            // Otherwise load the method from the assembly
-            else
-            {
-                using var ms = new MemoryStream(Config.DLLBytes);
-                var assembly = AssemblyLoadContext.Default.LoadFromStream(ms);
-                var type = assembly.GetType("RuriLib.CompiledConfig");
-                method = type.GetMember("Execute").First() as MethodInfo;
-            }
-
-            Providers.Security.X509RevocationMode = Config.Mode == ConfigMode.DLL
-                ? System.Security.Cryptography.X509Certificates.X509RevocationMode.Online
-                : System.Security.Cryptography.X509Certificates.X509RevocationMode.NoCheck;
-
-            var wordlistType = settings.Environment.WordlistTypes.FirstOrDefault(t => t.Name == DataPool.WordlistType);
-            globalVariables = new ExpandoObject();
-
-            if (wordlistType == null)
-                throw new NullReferenceException($"The wordlist type with name {DataPool.WordlistType} was not found in the Environment");
-
-            resources = new();
-
-            // Resources will need to be disposed of
-            foreach (var opt in Config.Settings.DataSettings.Resources)
-            {
-                try
-                {
-                    resources[opt.Name] = opt switch
+                    if (!proxyPool.Proxies.Any())
                     {
-                        LinesFromFileResourceOptions x => new LinesFromFileResource(x),
-                        RandomLinesFromFileResourceOptions x => new RandomLinesFromFileResource(x),
-                        _ => throw new NotImplementedException()
+                        throw new Exception("No proxies that respect the allowed types are available, but the job is set to use proxies");
+                    }
+                }
+
+                // Wait for the start condition to be verified
+                await base.Start().ConfigureAwait(false);
+
+                Script script = null;
+                MethodInfo method = null;
+
+                // If not in DLL mode, build the C# script and compile it
+                if (Config.Mode == ConfigMode.DLL)
+                {
+                    using var ms = new MemoryStream(Config.DLLBytes);
+                    var assembly = AssemblyLoadContext.Default.LoadFromStream(ms);
+                    var type = assembly.GetType("RuriLib.CompiledConfig");
+                    method = type.GetMember("Execute").First() as MethodInfo;
+                }
+                else if (Config.Mode == ConfigMode.Legacy)
+                {
+                    // Nothing to do here
+                }
+                else
+                {
+                    switch (Config.Mode)
+                    {
+                        case ConfigMode.Stack:
+                            Config.CSharpScript = Stack2CSharpTranspiler.Transpile(Config.Stack, Config.Settings);
+                            break;
+
+                        case ConfigMode.LoliCode:
+                            Config.CSharpScript = Loli2CSharpTranspiler.Transpile(Config.LoliCodeScript, Config.Settings);
+                            break;
+                    }
+
+                    script = new ScriptBuilder().Build(Config.CSharpScript, Config.Settings.ScriptSettings, pluginRepo);
+                    script.Compile();
+                }
+
+                Providers.Security.X509RevocationMode = Config.Mode == ConfigMode.DLL
+                    ? System.Security.Cryptography.X509Certificates.X509RevocationMode.Online
+                    : System.Security.Cryptography.X509Certificates.X509RevocationMode.NoCheck;
+
+                var wordlistType = settings.Environment.WordlistTypes.FirstOrDefault(t => t.Name == DataPool.WordlistType);
+                globalVariables = new ExpandoObject();
+                legacyGlobalVariables = new();
+                legacyGlobalCookies = new();
+
+                if (wordlistType == null)
+                    throw new NullReferenceException($"The wordlist type with name {DataPool.WordlistType} was not found in the Environment");
+
+                resources = new();
+
+                // Resources will need to be disposed of
+                foreach (var opt in Config.Settings.DataSettings.Resources)
+                {
+                    try
+                    {
+                        resources[opt.Name] = opt switch
+                        {
+                            LinesFromFileResourceOptions x => new LinesFromFileResource(x),
+                            RandomLinesFromFileResourceOptions x => new RandomLinesFromFileResource(x),
+                            _ => throw new NotImplementedException()
+                        };
+                    }
+                    catch
+                    {
+                        throw new Exception($"Could not create resource {opt.Name}");
+                    }
+                }
+
+                globalVariables.Resources = resources;
+                httpClient = new();
+                asyncLocker = new();
+                var runtime = Python.CreateRuntime();
+                var pyengine = runtime.GetEngine("py");
+                var pco = (PythonCompilerOptions)pyengine.GetCompilerOptions();
+                pco.Module &= ~ModuleOptions.Optimized;
+
+                long index = 0;
+                var workItems = DataPool.DataList.Select(line =>
+                {
+                    var input = new MultiRunInput
+                    {
+                        Job = this,
+                        ProxyPool = proxyPool,
+                        BotData = new BotData(Providers, Config.Settings, new BotLogger(), new DataLine(line, wordlistType),
+                            null, ShouldUseProxies(ProxyMode, Config.Settings.ProxySettings)),
+                        Globals = globalVariables,
+                        LegacyLoliScript = Config.LoliScript,
+                        LegacyGlobals = legacyGlobalVariables,
+                        LegacyGlobalCookies = legacyGlobalCookies,
+                        Script = script,
+                        IsDLL = Config.Mode == ConfigMode.DLL,
+                        IsLegacy = Config.Mode == ConfigMode.Legacy,
+                        DLLMethod = method,
+                        CustomInputsAnswers = CustomInputsAnswers,
+                        Index = index++
                     };
-                }
-                catch
-                {
-                    throw new Exception($"Could not create resource {opt.Name}");
-                }
-            }
 
-            globalVariables.Resources = resources;
-            httpClient = new();
-            asyncLocker = new();
-            var runtime = Python.CreateRuntime();
-            var pyengine = runtime.GetEngine("py");
-            var pco = (PythonCompilerOptions)pyengine.GetCompilerOptions();
-            pco.Module &= ~ModuleOptions.Optimized;
+                    input.BotData.Logger.Enabled = settings.RuriLibSettings.GeneralSettings.EnableBotLogging && Config.Mode != ConfigMode.DLL;
+                    input.BotData.SetObject("httpClient", httpClient); // Add the default HTTP client
+                    input.BotData.SetObject("ironPyEngine", pyengine); // Add the IronPython engine
+                    input.BotData.AsyncLocker = asyncLocker;
 
-            long index = 0;
-            var workItems = DataPool.DataList.Select(line =>
-            {
-                var input = new MultiRunInput
+                    return input;
+                });
+
+                parallelizer = ParallelizerFactory<MultiRunInput, CheckResult>
+                    .Create(settings.RuriLibSettings.GeneralSettings.ParallelizerType, workItems,
+                        workFunction, Bots, DataPool.Size, Skip, BotLimit);
+
+                parallelizer.CPMLimit = Config.Settings.GeneralSettings.MaximumCPM;
+                parallelizer.NewResult += DataProcessed;
+                parallelizer.StatusChanged += StatusChanged;
+                parallelizer.TaskError += PropagateTaskError;
+                parallelizer.Error += PropagateError;
+                parallelizer.NewResult += PropagateResult;
+                parallelizer.Completed += PropagateCompleted;
+                parallelizer.Completed += (s, e) =>
                 {
-                    Job = this,
-                    ProxyPool = proxyPool,
-                    BotData = new BotData(Providers, Config.Settings, new BotLogger(), new DataLine(line, wordlistType),
-                        null, ShouldUseProxies(ProxyMode, Config.Settings.ProxySettings)),
-                    Globals = globalVariables,
-                    Script = script,
-                    IsDLL = Config.Mode == ConfigMode.DLL,
-                    DLLMethod = method,
-                    CustomInputsAnswers = CustomInputsAnswers,
-                    Index = index++
+                    Skip += DataTested;
                 };
 
-                input.BotData.Logger.Enabled = settings.RuriLibSettings.GeneralSettings.EnableBotLogging && Config.Mode != ConfigMode.DLL;
-                input.BotData.SetObject("httpClient", httpClient); // Add the default HTTP client
-                input.BotData.SetObject("ironPyEngine", pyengine); // Add the IronPython engine
-                input.BotData.AsyncLocker = asyncLocker;
-
-                return input;
-            });
-
-            parallelizer = ParallelizerFactory<MultiRunInput, CheckResult>
-                .Create(settings.RuriLibSettings.GeneralSettings.ParallelizerType, workItems, 
-                    workFunction, Bots, DataPool.Size, Skip, BotLimit);
-
-            parallelizer.CPMLimit = Config.Settings.GeneralSettings.MaximumCPM;
-            parallelizer.NewResult += DataProcessed;
-            parallelizer.StatusChanged += StatusChanged;
-            parallelizer.TaskError += PropagateTaskError;
-            parallelizer.Error += PropagateError;
-            parallelizer.NewResult += PropagateResult;
-            parallelizer.Completed += PropagateCompleted;
-            parallelizer.Completed += (s, e) => Skip += DataTested;
-
-            ResetStats();
-            StartTimers();
-            logger?.LogInfo(Id, "All set, starting the execution");
-            await parallelizer.Start();
+                ResetStats();
+                StartTimers();
+                logger?.LogInfo(Id, "All set, starting the execution");
+                await parallelizer.Start().ConfigureAwait(false);
+            }
+            finally
+            {
+                // Reset the status
+                if (Status == JobStatus.Starting)
+                {
+                    Status = JobStatus.Idle;
+                }
+            }
         }
 
         public override async Task Stop()
         {
             try
             {
-                await parallelizer?.Stop();
+                if (parallelizer is not null)
+                {
+                    await parallelizer.Stop().ConfigureAwait(false);
+                }
             }
             finally
             {
@@ -489,7 +626,10 @@ namespace RuriLib.Models.Jobs
         {
             try
             {
-                await parallelizer?.Abort();
+                if (parallelizer is not null)
+                {
+                    await parallelizer.Abort().ConfigureAwait(false);
+                }
             }
             finally
             {
@@ -503,7 +643,10 @@ namespace RuriLib.Models.Jobs
         {
             try
             {
-                await parallelizer?.Pause();
+                if (parallelizer is not null)
+                {
+                    await parallelizer.Pause().ConfigureAwait(false);
+                }
             }
             finally
             {
@@ -514,7 +657,11 @@ namespace RuriLib.Models.Jobs
 
         public override async Task Resume()
         {
-            await parallelizer?.Resume();
+            if (parallelizer is not null)
+            {
+                await parallelizer.Resume().ConfigureAwait(false);
+            }
+
             StartTimers();
             logger?.LogInfo(Id, "Execution resumed");
         }
@@ -522,7 +669,7 @@ namespace RuriLib.Models.Jobs
 
         #region Public Methods
         public async Task FetchProxiesFromSources()
-            => await proxyPool.ReloadAll(ShuffleProxies);
+            => await proxyPool.ReloadAll(ShuffleProxies).ConfigureAwait(false);
         #endregion
 
         #region Wrappers for Parallelizer methods
@@ -530,40 +677,44 @@ namespace RuriLib.Models.Jobs
         {
             if (parallelizer != null)
             {
-                await parallelizer.ChangeDegreeOfParallelism(amount);
+                await parallelizer.ChangeDegreeOfParallelism(amount).ConfigureAwait(false);
                 logger?.LogInfo(Id, $"Changed bots to {amount}");
+                OnBotsChanged?.Invoke(this, EventArgs.Empty);
             }
         }
         #endregion
 
         #region Propagation of Parallelizer events
-        private void PropagateTaskError(object sender, ErrorDetails<MultiRunInput> details)
+        private void PropagateTaskError(object _, ErrorDetails<MultiRunInput> details)
         {
-            OnTaskError?.Invoke(sender, details);
+            OnTaskError?.Invoke(this, details);
             logger?.LogException(Id, details.Exception);
         }
 
-        private void PropagateError(object sender, Exception ex)
+        private void PropagateError(object _, Exception ex)
         {
-            OnError?.Invoke(sender, ex);
+            OnError?.Invoke(this, ex);
             logger?.LogException(Id, ex);
         }
 
-        private void PropagateResult(object sender, ResultDetails<MultiRunInput, CheckResult> result)
+        private void PropagateResult(object _, ResultDetails<MultiRunInput, CheckResult> result)
         {
-            OnResult?.Invoke(sender, result);
-            // We're not logging results to the IJobLogger because they could arrive at a very high rate
-            // and not be very useful, we're mostly interested in errors here.
+            OnResult?.Invoke(this, result);
+
+            if (!settings.RuriLibSettings.GeneralSettings.LogAllResults) return;
+            
+            var data = result.Result.BotData;
+            logger?.LogInfo(Id, $"[{data.STATUS}] {data.Line.Data} ({data.Proxy})");
         }
 
-        private void PropagateProgress(object sender, float progress)
+        private void PropagateProgress(object _, float progress)
         {
-            OnProgress?.Invoke(sender, progress);
+            OnProgress?.Invoke(this, progress);
         }
 
-        private void PropagateCompleted(object sender, EventArgs e)
+        private void PropagateCompleted(object _, EventArgs e)
         {
-            OnCompleted?.Invoke(sender, e);
+            OnCompleted?.Invoke(this, e);
             logger?.LogInfo(Id, "Execution completed");
         }
         #endregion
@@ -576,7 +727,7 @@ namespace RuriLib.Models.Jobs
 
             if (PeriodicReloadInterval > TimeSpan.Zero)
             {
-                proxyReloadTimer = new Timer(new TimerCallback(async _ => await proxyPool.ReloadAll(ShuffleProxies)),
+                proxyReloadTimer = new Timer(new TimerCallback(async _ => await proxyPool.ReloadAll(ShuffleProxies).ConfigureAwait(false)),
                     null, (int)PeriodicReloadInterval.TotalMilliseconds, (int)PeriodicReloadInterval.TotalMilliseconds);
             }
         }
@@ -667,6 +818,7 @@ namespace RuriLib.Models.Jobs
 
             // Add it to the local list of hits
             Hits.Add(hit);
+            OnHit?.Invoke(this, hit);
 
             foreach (var hitOutput in HitOutputs)
             {
@@ -769,6 +921,10 @@ namespace RuriLib.Models.Jobs
         public ProxyPool ProxyPool { get; set; }
         public Script Script { get; set; }
         public bool IsDLL { get; set; }
+        public bool IsLegacy { get; set; }
+        public string LegacyLoliScript { get; set; }
+        public VariablesList LegacyGlobals { get; set; }
+        public Dictionary<string, string> LegacyGlobalCookies { get; set; }
         public MethodInfo DLLMethod { get; set; }
         public Dictionary<string, string> CustomInputsAnswers { get; set; }
         public long Index { get; set; }

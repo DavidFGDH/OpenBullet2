@@ -139,7 +139,8 @@ namespace RuriLib.Models.Blocks.Custom
                 if (!Disabled)
                     definedVariables.Add(OutputVariable);
 
-                writer.Write($"var {OutputVariable} = ");
+                var outputType = Recursive ? "List<string>" : "string";
+                writer.Write($"{outputType} {OutputVariable} = ");
             }
 
             switch (Mode)
@@ -197,15 +198,21 @@ namespace RuriLib.Models.Blocks.Custom
                 case ParseMode.Regex:
                     writer.Write(CSharpWriter.FromSetting(Settings["pattern"]) + ", ");
                     writer.Write(CSharpWriter.FromSetting(Settings["outputFormat"]) + ", ");
+                    writer.Write(CSharpWriter.FromSetting(Settings["multiLine"]) + ", ");
                     break;
             }
 
             writer.Write(CSharpWriter.FromSetting(Settings["prefix"]) + ", ");
-            writer.Write(CSharpWriter.FromSetting(Settings["suffix"]));
+            writer.Write(CSharpWriter.FromSetting(Settings["suffix"]) + ", ");
+            writer.Write(CSharpWriter.FromSetting(Settings["urlEncodeOutput"]));
             writer.WriteLine(");");
 
+            writer.WriteLine($"data.LogVariableAssignment(nameof({OutputVariable}));");
+
             if (IsCapture)
+            {
                 writer.WriteLine($"data.MarkForCapture(nameof({OutputVariable}));");
+            }
 
             return writer.ToString();
         }

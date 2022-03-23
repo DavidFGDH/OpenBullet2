@@ -2,9 +2,11 @@
 using Blazored.Modal;
 using Blazored.Modal.Services;
 using Microsoft.AspNetCore.Components;
-using OpenBullet2.Entities;
+using Microsoft.AspNetCore.Components.Authorization;
+using OpenBullet2.Auth;
+using OpenBullet2.Core.Entities;
+using OpenBullet2.Core.Services;
 using OpenBullet2.Helpers;
-using OpenBullet2.Services;
 using RuriLib.Extensions;
 using RuriLib.Services;
 using System;
@@ -22,12 +24,14 @@ namespace OpenBullet2.Shared.Forms
 
         [Inject] private IFileReaderService FileReaderService { get; set; }
         [Inject] private RuriLibSettingsService RuriLibSettings { get; set; }
-        [Inject] private PersistentSettingsService PersistentSettings { get; set; }
+        [Inject] private OpenBulletSettingsService OBSettingsService { get; set; }
+        [Inject] private AuthenticationStateProvider Auth { get; set; }
 
         private ElementReference inputTypeFileElement;
         private List<string> wordlistTypes;
         private WordlistEntity wordlist;
         private MemoryStream memoryStream;
+        private int uid = -1;
         private long max;
         private long value;
         private decimal progress;
@@ -47,8 +51,13 @@ namespace OpenBullet2.Shared.Forms
                 Type = wordlistTypes.First()
             };
 
-            baseDirectory = Directory.Exists("UserData") ? "UserData" : Directory.GetCurrentDirectory();
-            await LoadTree(baseDirectory);
+            uid = await ((OBAuthenticationStateProvider)Auth).GetCurrentUserId();
+
+            if (uid == 0)
+            {
+                baseDirectory = Directory.Exists("UserData") ? "UserData" : Directory.GetCurrentDirectory();
+                await LoadTree(baseDirectory);
+            }
         }
 
         private async Task ProcessUploadedWordlist()
@@ -99,7 +108,7 @@ namespace OpenBullet2.Shared.Forms
                 baseDirectory += '/';
             }
 
-            if (!PersistentSettings.OpenBulletSettings.SecuritySettings.AllowSystemWideFileAccess &&
+            if (!OBSettingsService.Settings.SecuritySettings.AllowSystemWideFileAccess &&
                 !baseDirectory.IsSubPathOf(Directory.GetCurrentDirectory()))
             {
                 await js.AlertError(Loc["Unauthorized"], Loc["SystemWideFileAccessDisabled"]);
@@ -140,7 +149,7 @@ namespace OpenBullet2.Shared.Forms
                 return;
             }
 
-            wordlist.FileName = selectedNode.Path;
+            wordlist.FileName = selectedNode.Path.Replace("\\", "/");
             wordlist.Total = File.ReadLines(selectedNode.Path).Count();
             BlazoredModal.Close(ModalResult.Ok(wordlist));
         }

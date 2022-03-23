@@ -151,7 +151,7 @@ namespace RuriLib.Http
             }
         }
         /// <summary>
-        /// Reads all Header Lines using Span<T> For High Perfromace Parsing.
+        /// Reads all Header Lines using <see cref="Span{T}"/> For High Perfromace Parsing.
         /// </summary>
         /// <param name="buff">Buffered Data From Pipe</param>
         private bool ReadHeadersFastPath(ref ReadOnlySequence<byte> buff)
@@ -199,8 +199,17 @@ namespace RuriLib.Http
             {
                 return;
             }
+
             // changed to use span directly to decrease the number of strings allocated (less GC activity)
             var separatorPos = header.IndexOf((byte)':');
+
+            // If not found, don't do anything because the header is not valid
+            // Sometimes it can happen that the first line e.g. HTTP/1.1 200 OK is read as a header (maybe the buffer
+            // is not advanced properly) so it can cause an exception.
+            if (separatorPos == -1)
+            {
+                return;
+            }
 
             var headerName = Encoding.UTF8.GetString(header.Slice(0, separatorPos));
             var headerValuespan = header.Slice(separatorPos + 1); // skip ':'

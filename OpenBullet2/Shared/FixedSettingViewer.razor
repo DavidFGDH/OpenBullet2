@@ -1,5 +1,6 @@
 ﻿@using RuriLib.Models.Blocks.Settings
 @using RuriLib.Extensions 
+@inject Microsoft.Extensions.Localization.IStringLocalizer<FixedSettingViewer> Loc
  
 <EditForm Model="BlockSetting">
     <div style="text-align: left;">
@@ -14,11 +15,25 @@
                         </div>
                     }
                     <div class="col align-self-stretch">
-                        <InputText @bind-Value="@x.Value" />
+                        @if (x.MultiLine)
+                        {
+                            <InputTextArea @bind-Value="@x.Value" />
+                        }
+                        else
+                        {
+                            <InputText @bind-Value="@x.Value" />
+                        }
                     </div>
                     <div class="col-auto ml-0 pl-0">
                         <SettingInputModeSelector BlockSetting="BlockSetting" SwitchedMode="@((args) => SwitchedMode.InvokeAsync(args))" />
                     </div>
+                    @if (CouldBeInterpolated(x))
+                    {
+                        <div class="col-12 mb-2">
+                            <span class="text-muted font-italic">@Loc["InterpolatedModeSuggestion"] </span>
+                            <span class="text-warning font-italic cursor-pointer" @onmousedown="@(async () => await SwitchToInterpolated(x))">@Loc["switchToInterpolatedMode"]?</span>
+                        </div>
+                    }
                 </div>
                 break;
 
@@ -65,8 +80,10 @@
                         </div>
                     }
                     <div class="col align-self-stretch">
-                        <InputSelect @bind-Value="@x.Value">
-                            @foreach (var name in Enum.GetNames(x.EnumType))
+                        <InputSelect ValueExpression="(() => x.PrettyName)"
+                             Value="x.PrettyName"
+                             ValueChanged="(string value) => x.SetFromPrettyName(value)">
+                            @foreach (var name in x.PrettyNames)
                             {
                                 <option value="@name">@name</option>
                             }
@@ -106,6 +123,13 @@
                     <div class="col-auto pl-0">
                         <SettingInputModeSelector BlockSetting="BlockSetting" SwitchedMode="@((args) => SwitchedMode.InvokeAsync(args))" />
                     </div>
+                    @if (CouldBeInterpolated(x))
+                    {
+                        <div class="col-12 mb-2">
+                            <span class="text-muted font-italic">@Loc["InterpolatedModeSuggestion"] </span>
+                            <span class="text-warning font-italic cursor-pointer" @onmousedown="@(async () => await SwitchToInterpolated(x))">@Loc["switchToInterpolatedMode"]?</span>
+                        </div>
+                    }
                 </div>
                 break;
 
@@ -123,6 +147,13 @@
                     <div class="col-auto pl-0">
                         <SettingInputModeSelector BlockSetting="BlockSetting" SwitchedMode="@((args) => SwitchedMode.InvokeAsync(args))" />
                     </div>
+                    @if (CouldBeInterpolated(x))
+                    {
+                        <div class="col-12 mb-2">
+                            <span class="text-muted font-italic">@Loc["InterpolatedModeSuggestion"] </span>
+                            <span class="text-warning font-italic cursor-pointer" @onmousedown="@(async () => await SwitchToInterpolated(x))">@Loc["switchToInterpolatedMode"]?</span>
+                        </div>
+                    }
                 </div>
                 break;
 
@@ -146,10 +177,3 @@
 
     </div>
 </EditForm>
-
-@code {
-    [Parameter] public BlockSetting BlockSetting { get; set; }
-    [Parameter] public bool DisplayName { get; set; } = true;
-    [Parameter] public EventCallback<SettingInputMode> SwitchedMode { get; set; }
-    public string Name => BlockSetting.Name.ToReadableName();
-}

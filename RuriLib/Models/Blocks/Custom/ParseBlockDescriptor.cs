@@ -26,6 +26,7 @@ namespace RuriLib.Models.Blocks.Custom
                 { "input", new StringParameter("input", "data.SOURCE", SettingInputMode.Variable) },
                 { "prefix", new StringParameter("prefix") },
                 { "suffix", new StringParameter("suffix") },
+                { "urlEncodeOutput", new BoolParameter("urlEncodeOutput", false) },
 
                 // LR
                 { "leftDelim", new StringParameter("leftDelim") },
@@ -44,7 +45,8 @@ namespace RuriLib.Models.Blocks.Custom
 
                 // REGEX
                 { "pattern", new StringParameter("pattern") },
-                { "outputFormat", new StringParameter("outputFormat") }
+                { "outputFormat", new StringParameter("outputFormat") },
+                { "multiLine", new BoolParameter("multiLine", false) }
             };
         }
     }

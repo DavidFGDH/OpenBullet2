@@ -1,5 +1,5 @@
 ﻿@page "/proxies/groups"
-@using OpenBullet2.Entities
+@using OpenBullet2.Core.Entities
 @inject Microsoft.Extensions.Localization.IStringLocalizer<ProxyGroups> Loc
 @attribute [Authorize(Roles = "Admin,Guest")]
 
@@ -54,6 +54,12 @@
     <InputNumber style="width: 100px" @bind-Value="maxPing" />
 </EditForm>
 
+<div>
+    <span><b>@Loc["Total"]: </b>@proxies.Count</span>
+    <span class="fg-hit ml-1"><b>@Loc["Working"]: </b>@WorkingProxies</span>
+    <span class="fg-fail ml-1"><b>@Loc["NotWorking"]: </b>@NotWorkingProxies</span>
+</div>
+
 @if (gridLoad != null && !gridLoad.IsCanceled && gridLoad.IsCompleted)
 {
     <GridComponent @ref="gridComponent" T="ProxyEntity" Grid="@grid"></GridComponent>
@@ -65,7 +71,8 @@ else
 
 <hr />
 <BullettaHelp Title="@help1x00" Messages="new string[] { help1x01, help1x02, help1x03 }" />
-<br /><br />
+<br />
+<br />
 
 @code {
     private string help1x00 => Loc["Help1x00"];

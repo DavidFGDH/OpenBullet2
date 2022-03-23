@@ -3,13 +3,9 @@ using Blazored.Modal.Services;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Web;
 using Microsoft.JSInterop;
-using Newtonsoft.Json;
-using OpenBullet2.Entities;
 using OpenBullet2.Helpers;
 using OpenBullet2.Logging;
-using OpenBullet2.Models.Data;
-using OpenBullet2.Models.Jobs;
-using OpenBullet2.Repositories;
+using OpenBullet2.Core.Repositories;
 using OpenBullet2.Services;
 using OpenBullet2.Shared.Forms;
 using RuriLib.Logging;
@@ -22,6 +18,10 @@ using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using OpenBullet2.Core.Services;
+using OpenBullet2.Core.Entities;
+using Microsoft.EntityFrameworkCore;
+using RuriLib.Models.Configs;
 
 namespace OpenBullet2.Shared
 {
@@ -31,10 +31,9 @@ namespace OpenBullet2.Shared
 
         [Inject] private IModalService Modal { get; set; }
         [Inject] private VolatileSettingsService VolatileSettings { get; set; }
-        [Inject] private PersistentSettingsService PersistentSettings { get; set; }
+        [Inject] private OpenBulletSettingsService OBSettingsService { get; set; }
         [Inject] private MemoryJobLogger Logger { get; set; }
-        [Inject] private IJobRepository JobRepo { get; set; }
-        [Inject] private JobManagerService JobManager { get; set; }
+        [Inject] private IProxyGroupRepository ProxyGroups { get; set; }
         [Inject] private NavigationManager Nav { get; set; }
 
         private bool changingBots = false;
@@ -42,14 +41,19 @@ namespace OpenBullet2.Shared
         private List<Hit> selectedHits = new();
         private Hit lastSelectedHit;
         private Timer uiRefreshTimer;
+        private List<ProxyGroupEntity> proxyGroups;
 
-        protected override void OnInitialized() => AddEventHandlers();
+        protected override async Task OnInitializedAsync()
+        {
+            AddEventHandlers();
+            proxyGroups = await ProxyGroups.GetAll().ToListAsync();
+        }
 
         protected override void OnAfterRender(bool firstRender)
         {
             if (firstRender)
             {
-                var interval = Math.Max(50, PersistentSettings.OpenBulletSettings.GeneralSettings.JobUpdateInterval);
+                var interval = Math.Max(50, OBSettingsService.Settings.GeneralSettings.JobUpdateInterval);
                 uiRefreshTimer = new Timer(new TimerCallback(async _ => await InvokeAsync(StateHasChanged)),
                     null, interval, interval);
             }
@@ -68,12 +72,19 @@ namespace OpenBullet2.Shared
                 var newAmount = (int)result.Data;
                 changingBots = true;
 
-                await Job.ChangeBots(newAmount);
-
-                Job.Bots = newAmount;
-                changingBots = false;
-
-                _ = Task.Run(() => SaveJobOptions(this, EventArgs.Empty));
+                try
+                {
+                    await Job.ChangeBots(newAmount);
+                    Job.Bots = newAmount;
+                }
+                catch (Exception ex)
+                {
+                    await js.AlertException(ex);
+                }
+                finally
+                {
+                    changingBots = false;
+                }
             }
         }
 
@@ -91,8 +102,7 @@ namespace OpenBullet2.Shared
                 : string.Empty;
 
             var message = string.Format(Loc["LineCheckedMessage"], data, proxy, botData.STATUS);
-            var color = botData.STATUS switch
-            {
+            var color = botData.STATUS switch {
                 "SUCCESS" => "yellowgreen",
                 "FAIL" => "tomato",
                 "BAN" => "plum",
@@ -106,7 +116,7 @@ namespace OpenBullet2.Shared
 
         private void PlaySoundOnHit(object sender, ResultDetails<MultiRunInput, CheckResult> details)
         {
-            if (details.Result.BotData.STATUS == "SUCCESS" && PersistentSettings.OpenBulletSettings.CustomizationSettings.PlaySoundOnHit)
+            if (details.Result.BotData.STATUS == "SUCCESS" && OBSettingsService.Settings.CustomizationSettings.PlaySoundOnHit)
             {
                 _ = js.InvokeVoidAsync("playHitSound");
             }
@@ -129,18 +139,6 @@ namespace OpenBullet2.Shared
         private void LogCompleted(object sender, EventArgs e)
         {
             Logger.LogInfo(Job.Id, Loc["TaskManagerCompleted"]);
-        }
-
-        private void SaveRecord(object sender, EventArgs e)
-        {
-            // Fire and forget
-            JobManager.SaveRecord(Job).ConfigureAwait(false);
-        }
-
-        private void SaveJobOptions(object sender, EventArgs e)
-        {
-            // Fire and forget
-            JobManager.SaveJobOptions(Job).ConfigureAwait(false);
         }
 
         private async Task Start()
@@ -232,7 +230,7 @@ namespace OpenBullet2.Shared
             {
                 var parameters = new ModalParameters();
                 parameters.Add(nameof(CustomInputQuestion.Question), input.Description);
-                parameters.Add(nameof(CustomInputQuestion.Answer), input.DefaultAnswer);
+                parameters.Add(nameof(CustomInputQuestion.DefaultAnswer), input.DefaultAnswer);
 
                 var modal = Modal.Show<CustomInputQuestion>(Loc["CustomInput"], parameters);
                 var result = await modal.Result;
@@ -241,8 +239,7 @@ namespace OpenBullet2.Shared
             }
         }
 
-        private static string GetHitColor(Hit hit) => hit.Type switch
-        {
+        private static string GetHitColor(Hit hit) => hit.Type switch {
             "SUCCESS" => "var(--fg-hit)",
             "NONE" => "var(--fg-tocheck)",
             _ => "var(--fg-custom)"
@@ -368,7 +365,9 @@ namespace OpenBullet2.Shared
 
             if (lastSelectedHit.BotLogger == null)
             {
-                await js.AlertError(Loc["Disabled"], Loc["BotLogDisabledError"]);
+                var errorMessage = lastSelectedHit.Config.Mode == ConfigMode.DLL ? Loc["BotLogCompiledConfigError"] : Loc["BotLogDisabledError"];
+                
+                await js.AlertError(Loc["Disabled"], errorMessage);
                 return;
             }
 
@@ -384,8 +383,7 @@ namespace OpenBullet2.Shared
             StateHasChanged();
         }
 
-        private List<Hit> GetFilteredHits() => hitsFilter switch
-        {
+        private List<Hit> GetFilteredHits() => hitsFilter switch {
             "SUCCESS" => Job.Hits.Where(h => h.Type == "SUCCESS").ToList(),
             "NONE" => Job.Hits.Where(h => h.Type == "NONE").ToList(),
             "CUSTOM" => Job.Hits.Where(h => h.Type != "SUCCESS" && h.Type != "NONE").ToList(),
@@ -395,9 +393,12 @@ namespace OpenBullet2.Shared
         private async Task ShowNoHitSelectedWarning()
             => await js.AlertError(Loc["Uh-Oh"], Loc["NoHitSelectedWarning"]);
 
+        private string GetProxyGroupName(int id)
+            => id == -1 ? "All" : proxyGroups.FirstOrDefault(g => g.Id == id)?.Name;
+
         private void AddEventHandlers()
         {
-            if (PersistentSettings.OpenBulletSettings.GeneralSettings.EnableJobLogging)
+            if (OBSettingsService.Settings.GeneralSettings.EnableJobLogging)
             {
                 Job.OnResult += LogResult;
                 Job.OnResult += PlaySoundOnHit;
@@ -405,11 +406,6 @@ namespace OpenBullet2.Shared
                 Job.OnError += LogError;
                 Job.OnCompleted += LogCompleted;
             }
-            
-            Job.OnCompleted += SaveRecord;
-            Job.OnTimerTick += SaveRecord;
-            Job.OnCompleted += SaveJobOptions;
-            Job.OnTimerTick += SaveJobOptions;
         }
 
         private void RemoveEventHandlers()
@@ -424,19 +420,6 @@ namespace OpenBullet2.Shared
             }
             catch
             {
-
-            }
-
-            try
-            {
-                Job.OnCompleted -= SaveRecord;
-                Job.OnTimerTick -= SaveRecord;
-                Job.OnCompleted -= SaveJobOptions;
-                Job.OnTimerTick -= SaveJobOptions;
-            }
-            catch 
-            {
-
             }
         }
 

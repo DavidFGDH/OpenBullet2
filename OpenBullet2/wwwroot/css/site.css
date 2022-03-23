@@ -291,6 +291,10 @@ app {
 
 /* CUSTOM DEFINITIONS -- */
 
+.cursor-pointer {
+    cursor: pointer;
+}
+
 /*  INPUTS -- */
 input:not([type=checkbox]), textarea {
     background-color: var(--bg-secondary);
@@ -396,7 +400,7 @@ a:hover {
     position: fixed;
     bottom: 0px;
     height: 62px;
-    width: 229px;
+    width: 220px;
     z-index: 1;
     background: var(--bg-secondary);
 }

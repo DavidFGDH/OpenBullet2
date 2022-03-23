@@ -1,7 +1,9 @@
 ﻿using Newtonsoft.Json;
+using RuriLib.Extensions;
 using RuriLib.Helpers.Transpilers;
 using RuriLib.Models.Configs;
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
@@ -52,12 +54,52 @@ namespace RuriLib.Helpers
                         await CreateZipEntryFromBytes(archive, "build.dll", config.DLLBytes);
                         break;
 
+                    case ConfigMode.Legacy:
+                        await CreateZipEntryFromString(archive, "script.legacy", config.LoliScript);
+                        break;
+
                     default:
                         throw new NotSupportedException();
                 }
             }
 
             config.UpdateHashes();
+            return packageStream.ToArray();
+        }
+
+        /// <summary>
+        /// Packs multiple <paramref name="configs"/> into a single archive.
+        /// </summary>
+        public static async Task<byte[]> Pack(IEnumerable<Config> configs)
+        {
+            // Use a dictionary to keep track of filenames and avoid duplicates
+            var fileNames = new Dictionary<string, int>();
+
+            using var packageStream = new MemoryStream();
+            using (var archive = new ZipArchive(packageStream, ZipArchiveMode.Create, false))
+            {
+                foreach (var config in configs)
+                {
+                    var fileName = config.Metadata.Name.ToValidFileName();
+
+                    // If a config with the same filename was already added, append a number
+                    // and increase it for the next round
+                    if (fileNames.ContainsKey(fileName))
+                    {
+                        fileNames[fileName]++;
+                        fileName += fileNames[fileName];
+                    }
+                    // Otherwise create a new entry in the dictionary
+                    else
+                    {
+                        fileNames[fileName] = 1;
+                    }
+
+                    var packedConfig = await Pack(config);
+                    await CreateZipEntryFromBytes(archive, fileName + ".opk", packedConfig);
+                }
+            }
+
             return packageStream.ToArray();
         }
 
@@ -124,6 +166,19 @@ namespace RuriLib.Helpers
                     catch
                     {
                         throw new FileLoadException("Could not load the file from the opk archive", "build.dll");
+                    }
+                }
+                else if (archive.Entries.Any(e => e.Name.Contains("script.legacy")))
+                {
+                    // script.legacy
+                    try
+                    {
+                        config.LoliScript = ReadStringFromZipEntry(archive, "script.legacy");
+                        config.Mode = ConfigMode.Legacy;
+                    }
+                    catch
+                    {
+                        throw new FileLoadException("Could not load the file from the opk archive", "script.legacy");
                     }
                 }
                 else

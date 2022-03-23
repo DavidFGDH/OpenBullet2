@@ -1,6 +1,6 @@
 ﻿using Microsoft.AspNetCore.Components;
+using OpenBullet2.Core.Services;
 using OpenBullet2.Helpers;
-using OpenBullet2.Services;
 using RuriLib.Models.Configs;
 using RuriLib.Models.Proxies;
 using RuriLib.Services;
@@ -58,7 +58,7 @@ namespace OpenBullet2.Pages
                 .Select(w => w.Name)
                 .Where(w => !allowedWordlistTypes.Contains(w)).ToList();
 
-            quitBrowserStatuses = settings.PuppeteerSettings.QuitBrowserStatuses.ToList();
+            quitBrowserStatuses = settings.BrowserSettings.QuitBrowserStatuses.ToList();
             dontQuitBrowserStatuses = RuriLibSettings.GetStatuses()
                 .Where(s => !quitBrowserStatuses.Contains(s)).ToList();
         }
@@ -70,7 +70,7 @@ namespace OpenBullet2.Pages
             settings.ProxySettings.BanProxyStatuses = proxyBanStatuses.ToArray();
             settings.ProxySettings.AllowedProxyTypes = allowedProxyTypes.ToArray();
             settings.DataSettings.AllowedWordlistTypes = allowedWordlistTypes.ToArray();
-            settings.PuppeteerSettings.QuitBrowserStatuses = quitBrowserStatuses.ToArray();
+            settings.BrowserSettings.QuitBrowserStatuses = quitBrowserStatuses.ToArray();
         }
 
         async Task RestoreDefaults()

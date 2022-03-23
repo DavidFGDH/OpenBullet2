@@ -1,4 +1,5 @@
 ﻿using RuriLib.Attributes;
+using RuriLib.Functions.Conversion;
 using RuriLib.Logging;
 using RuriLib.Models.Bots;
 using System;
@@ -6,6 +7,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Net.WebSockets;
+using System.Threading;
 using System.Threading.Tasks;
 using Websocket.Client;
 
@@ -16,7 +18,7 @@ namespace RuriLib.Blocks.Requests.WebSocket
     {
         [Block("Connects to a Web Socket", name = "WebSocket Connect",
             extraInfo = "Only works with HTTP proxies or without any proxy")]
-        public static async Task WsConnect(BotData data, string url, int keepAliveMilliseconds = 5000)
+        public static async Task WsConnect(BotData data, string url, int keepAliveMilliseconds = 5000, Dictionary<string, string> customHeaders = null)
         {
             data.Logger.LogHeader();
 
@@ -38,13 +40,26 @@ namespace RuriLib.Blocks.Requests.WebSocket
                 }
             }
 
-            var factory = new Func<ClientWebSocket>(() => new ClientWebSocket
+            var factory = new Func<ClientWebSocket>(() =>
             {
-                Options =
+                var client = new ClientWebSocket
                 {
-                    KeepAliveInterval = TimeSpan.FromMilliseconds(keepAliveMilliseconds),
-                    Proxy = proxy
+                    Options =
+                    {
+                        KeepAliveInterval = TimeSpan.FromMilliseconds(keepAliveMilliseconds),
+                        Proxy = proxy
+                    }
+                };
+
+                if (customHeaders is not null)
+                {
+                    foreach (var header in customHeaders)
+                    {
+                        client.Options.SetRequestHeader(header.Key, header.Value);
+                    }
                 }
+                
+                return client;
             });
 
             var wsMessages = new List<string>();
@@ -56,16 +71,35 @@ namespace RuriLib.Blocks.Requests.WebSocket
                 ErrorReconnectTimeout = null
             };
 
-            ws.MessageReceived.Subscribe(msg => 
+            ws.MessageReceived.Subscribe(msg =>
             {
                 lock (wsMessages)
                 {
-                    wsMessages.Add(msg.Text);
+                    switch (msg.MessageType)
+                    {
+                        case WebSocketMessageType.Text:
+                            wsMessages.Add(msg.Text);
+                            break;
+
+                        case WebSocketMessageType.Binary:
+                            // Binary responses will be encoded as base64 since there is no support for the
+                            // List<byte[]> type at the moment.
+                            wsMessages.Add(Base64Converter.ToBase64String(msg.Binary));
+                            break;
+                    }
+                }
+            });
+
+            ws.DisconnectionHappened.Subscribe(msg =>
+            {
+                if (msg.Exception != null)
+                {
+                    throw msg.Exception;
                 }
             });
 
             // Connect
-            await ws.Start();
+            await ws.Start().ConfigureAwait(false);
 
             if (!ws.IsRunning)
             {
@@ -88,16 +122,43 @@ namespace RuriLib.Blocks.Requests.WebSocket
             data.Logger.Log($"Sent {message} to the server", LogColors.MossGreen);
         }
 
-        [Block("Gets unread messages that the server sent since the last read", name = "WebSocket Read")]
-        public static List<string> WsRead(BotData data)
+        [Block("Sends a raw binary message on the Web Socket", name = "WebSocket Send Raw")]
+        public static void WsSendRaw(BotData data, byte[] message)
         {
             data.Logger.LogHeader();
 
-            var messages = GetMessages(data);
+            var ws = GetSocket(data);
+            ws.Send(message);
+
+            data.Logger.Log($"Sent {message.Length} bytes to the server", LogColors.MossGreen);
+        }
+
+        [Block("Gets unread messages that the server sent since the last read", name = "WebSocket Read")]
+        public static async Task<List<string>> WsRead(BotData data, int pollIntervalInMilliseconds = 10, int timeoutMilliseconds = 10000)
+        {
+            data.Logger.LogHeader();
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(timeoutMilliseconds));
+            var messages = new List<string>();
+
+            // Wait until a message actually arrives otherwise it will be empty when the block is executed
+            while (messages.Count == 0)
+            {
+                messages = GetMessages(data);
+                await Task.Delay(pollIntervalInMilliseconds);
+
+                if (cts.IsCancellationRequested)
+                {
+                    break;
+                }
+            }
+
             var cloned = messages.Select(m => m).ToList();
 
             lock (messages)
+            {
                 messages.Clear();
+            }
 
             data.Logger.Log($"Unread messages from server", LogColors.MossGreen);
             data.Logger.Log(cloned, LogColors.MossGreen);

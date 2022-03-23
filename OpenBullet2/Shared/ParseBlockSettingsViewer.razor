@@ -23,6 +23,7 @@
 <BlockInputField BlockSetting="@Block.Settings["input"]" />
 <BlockInputField BlockSetting="@Block.Settings["prefix"]" />
 <BlockInputField BlockSetting="@Block.Settings["suffix"]" />
+<BlockInputField BlockSetting="@Block.Settings["urlEncodeOutput"]" />
 <hr />
 
 <RadzenRadioButtonList @bind-Value="Block.Mode" TValue="ParseMode">
@@ -62,6 +63,7 @@
         case ParseMode.Regex:
             <BlockInputField BlockSetting="@Block.Settings["pattern"]" />
             <BlockInputField BlockSetting="@Block.Settings["outputFormat"]" />
+            <BlockInputField BlockSetting="@Block.Settings["multiLine"]" />
             break;
     }
 </EditForm>

@@ -22,12 +22,16 @@ namespace RuriLib.Models.Configs
         
         public List<BlockInstance> Stack { get; set; } = new List<BlockInstance>();
         public string LoliCodeScript { get; set; } = "";
+        public string LoliScript { get; set; } = "";
         public string CSharpScript { get; set; } = "";
         public byte[] DLLBytes { get; set; } = Array.Empty<byte>();
 
         // Hashes used to check if the config was saved
+        private string stackerHash;
         private string loliCodeHash;
+        private string loliScriptHash;
         private string cSharpHash;
+        private string dllHash;
 
         [JsonIgnore]
         public List<(BlockInstance, int)> DeletedBlocksHistory { get; set; } = new List<(BlockInstance, int)>();
@@ -74,12 +78,17 @@ namespace RuriLib.Models.Configs
                     ConfigMode.DLL => true,
                     ConfigMode.Stack => Stack.Any(b => IsDangerousBlock(b)),
                     ConfigMode.LoliCode => Loli2StackTranspiler.Transpile(LoliCodeScript).Any(b => IsDangerousBlock(b)),
+                    ConfigMode.Legacy => false,
                     _ => throw new NotImplementedException(),
                 };
             }
+            catch (NotImplementedException)
+            {
+                throw;
+            }
             catch
             {
-                // We don't know, return false just to avoid false positives
+                // Something went wrong while checking, return false just to avoid false positives
                 return false;
             }
         }
@@ -88,23 +97,31 @@ namespace RuriLib.Models.Configs
             => b is LoliCodeBlockInstance || b is ScriptBlockInstance || b.Descriptor.Id == "ShellCommand";
 
         /// <summary>
-        /// Update the hashes of the current state of LoliCode and C# scripts
+        /// Update the hashes of the current state of the config
         /// (call this this when you first load the config or when you save changes to the repository).
         /// </summary>
         public void UpdateHashes()
         {
+            stackerHash = GetHash(JsonConvert.SerializeObject(Stack) + JsonConvert.SerializeObject(Settings));
             loliCodeHash = GetHash(LoliCodeScript + JsonConvert.SerializeObject(Settings));
+            loliScriptHash = GetHash(LoliScript + JsonConvert.SerializeObject(Settings));
             cSharpHash = GetHash(CSharpScript + JsonConvert.SerializeObject(Settings));
+            dllHash = GetHash(JsonConvert.SerializeObject(Settings));
         }
 
         /// <summary>
-        /// Checks if the config's LoliCode or C# code have been edited since
-        /// the last call of <see cref="UpdateHashes"/>.
+        /// Checks if the config's code has been edited since the last call of <see cref="UpdateHashes"/>.
         /// </summary>
         public bool HasUnsavedChanges()
-            => Mode == ConfigMode.CSharp
-                ? GetHash(CSharpScript + JsonConvert.SerializeObject(Settings)) != cSharpHash
-                : GetHash(LoliCodeScript + JsonConvert.SerializeObject(Settings)) != loliCodeHash;
+            => Mode switch
+            {
+                ConfigMode.Stack => GetHash(JsonConvert.SerializeObject(Stack) + JsonConvert.SerializeObject(Settings)) != stackerHash,
+                ConfigMode.LoliCode => GetHash(LoliCodeScript + JsonConvert.SerializeObject(Settings)) != loliCodeHash,
+                ConfigMode.CSharp => GetHash(CSharpScript + JsonConvert.SerializeObject(Settings)) != cSharpHash,
+                ConfigMode.DLL => GetHash(JsonConvert.SerializeObject(Settings)) != dllHash,
+                ConfigMode.Legacy => GetHash(LoliScript + JsonConvert.SerializeObject(Settings)) != loliScriptHash,
+                _ => throw new NotImplementedException()
+            };
 
         private static string GetHash(string str)
             => HexConverter.ToHexString(Crypto.SHA1(Encoding.UTF8.GetBytes(str)));

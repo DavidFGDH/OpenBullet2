@@ -6,6 +6,7 @@ using RuriLib.Models.Bots;
 using System;
 using System.Collections.Generic;
 using System.Net;
+using System.Text;
 using System.Threading.Tasks;
 
 namespace RuriLib.Blocks.Requests.Ftp
@@ -13,7 +14,7 @@ namespace RuriLib.Blocks.Requests.Ftp
     [BlockCategory("FTP", "Blocks to work with the FTP protocol", "#fbec5d")]
     public static class Methods
     {
-        [Block("Connects to an FTP server")]
+        [Block("Connects to an FTP server", extraInfo = "Currently, this block only supports HTTP proxies")]
         public static async Task FtpConnect(BotData data, string host, int port = 21, 
             string username = "", string password = "", int timeoutMilliseconds = 10000)
         {
@@ -58,7 +59,8 @@ namespace RuriLib.Blocks.Requests.Ftp
             }
 
             data.SetObject("ftpClient", client);
-            await client.AutoConnectAsync(data.CancellationToken);
+            client.OnLogEvent = InitLogger(data);
+            await client.AutoConnectAsync(data.CancellationToken).ConfigureAwait(false);
             
             if (!client.IsConnected)
             {
@@ -76,7 +78,7 @@ namespace RuriLib.Blocks.Requests.Ftp
             var options = recursive ? FtpListOption.Recursive : FtpListOption.Auto;
             var list = new List<string>();
 
-            foreach (var item in await client.GetListingAsync("/", options))
+            foreach (var item in await client.GetListingAsync("/", options).ConfigureAwait(false))
             {
                 if (item.Type == FtpFileSystemObjectType.Directory && 
                     (kind == FtpItemKind.FilesAndFolders || kind == FtpItemKind.Folder))
@@ -102,7 +104,7 @@ namespace RuriLib.Blocks.Requests.Ftp
             data.Logger.LogHeader();
             var client = GetClient(data);
             await client.DownloadFileAsync(localFileName, remoteFileName, FtpLocalExists.Overwrite, 
-                FtpVerify.None, null, data.CancellationToken);
+                FtpVerify.None, null, data.CancellationToken).ConfigureAwait(false);
 
             data.Logger.Log($"{remoteFileName} downloaded to {localFileName}", LogColors.Maize);
         }
@@ -114,7 +116,7 @@ namespace RuriLib.Blocks.Requests.Ftp
             data.Logger.LogHeader();
             var client = GetClient(data);
             await client.DownloadDirectoryAsync(localDir, remoteDir, FtpFolderSyncMode.Update, existsPolicy,
-                FtpVerify.None, null, null, data.CancellationToken);
+                FtpVerify.None, null, null, data.CancellationToken).ConfigureAwait(false);
 
             data.Logger.Log($"{remoteDir} downloaded to {localDir}", LogColors.Maize);
         }
@@ -126,7 +128,7 @@ namespace RuriLib.Blocks.Requests.Ftp
             data.Logger.LogHeader();
             var client = GetClient(data);
             await client.UploadFileAsync(localFileName, remoteFileName, existsPolicy, true, 
-                FtpVerify.None, null, data.CancellationToken);
+                FtpVerify.None, null, data.CancellationToken).ConfigureAwait(false);
 
             data.Logger.Log($"{localFileName} uploaded to {remoteFileName}", LogColors.Maize);
         }
@@ -136,9 +138,31 @@ namespace RuriLib.Blocks.Requests.Ftp
         {
             data.Logger.LogHeader();
             var client = GetClient(data);
-            await client.DisconnectAsync(data.CancellationToken);
+            await client.DisconnectAsync(data.CancellationToken).ConfigureAwait(false);
 
             data.Logger.Log("Disconnected from the FTP server", LogColors.Maize);
+        }
+
+        [Block("Gets the protocol log", name = "Get Imap Log")]
+        public static string FtpGetLog(BotData data)
+        {
+            data.Logger.LogHeader();
+
+            var protocolLogger = data.TryGetObject<StringBuilder>("ftpLogger");
+            var log = protocolLogger.ToString();
+
+            data.Logger.Log(log, LogColors.Maize);
+
+            return log;
+        }
+
+        private static Action<FtpTraceLevel, string> InitLogger(BotData data)
+        {
+            var protocolLogger = new StringBuilder();
+            data.SetObject("ftpLogger", protocolLogger);
+
+            return new Action<FtpTraceLevel, string>((traceLevel, message)
+                => protocolLogger.AppendLine($"[{traceLevel}] {message}"));
         }
 
         private static FtpClient GetClient(BotData data)

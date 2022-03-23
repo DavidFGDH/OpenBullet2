@@ -9,8 +9,8 @@ using Microsoft.AspNetCore.Components.Forms;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Primitives;
 using OpenBullet2.Helpers;
-using OpenBullet2.Models.Settings;
-using OpenBullet2.Repositories;
+using OpenBullet2.Core.Models.Settings;
+using OpenBullet2.Core.Repositories;
 using OpenBullet2.Services;
 using RuriLib.Extensions;
 using RuriLib.Helpers;
@@ -22,6 +22,8 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
+using OpenBullet2.Core.Services;
+using System.IO.Compression;
 
 namespace OpenBullet2.Pages
 {
@@ -32,7 +34,7 @@ namespace OpenBullet2.Pages
         [Inject] private NavigationManager Nav { get; set; }
         [Inject] private ConfigService ConfigService { get; set; }
         [Inject] private VolatileSettingsService VolatileSettings { get; set; }
-        [Inject] private PersistentSettingsService PersistentSettings { get; set; }
+        [Inject] private OpenBulletSettingsService OBSettingsService { get; set; }
         [Inject] private IBlazorDownloadFileService BlazorDownloadFileService { get; set; }
 
         private Config selectedConfig;
@@ -59,8 +61,8 @@ namespace OpenBullet2.Pages
                 c.Add(x => x.IsRemote).Titled(Loc["Remote"]);
                 c.Add(x => x.Settings.ProxySettings.UseProxies).Titled(Loc["Proxies"]);
                 c.Add(x => x.Settings.DataSettings.AllowedWordlistTypesString).Titled(Loc["Wordlists"]);
-                c.Add(x => x.Metadata.CreationDate).Titled(Loc["CreationDate"]);
-                c.Add(x => x.Metadata.LastModified).Titled(Loc["LastModified"])
+                c.Add(x => x.Metadata.CreationDate).Titled(Loc["CreationDate"]).SetFilterWidgetType("DateTimeLocal").Format("{0:dd/MM/yyyy HH:mm}");
+                c.Add(x => x.Metadata.LastModified).Titled(Loc["LastModified"]).SetFilterWidgetType("DateTimeLocal").Format("{0:dd/MM/yyyy HH:mm}")
                     .Sortable(true).SortInitialDirection(GridShared.Sorting.GridSortDirection.Descending);
             };
 
@@ -161,7 +163,7 @@ namespace OpenBullet2.Pages
             ConfigService.SelectedConfig = selectedConfig;
             ConfigService.Configs.Add(selectedConfig);
             
-            selectedConfig.Metadata.Author = PersistentSettings.OpenBulletSettings.GeneralSettings.DefaultAuthor;
+            selectedConfig.Metadata.Author = OBSettingsService.Settings.GeneralSettings.DefaultAuthor;
             VolatileSettings.DebuggerLog = new();
             Nav.NavigateTo("config/edit/metadata");
         }
@@ -267,12 +269,22 @@ namespace OpenBullet2.Pages
 
             ConfigService.SelectedConfig = selectedConfig;
 
-            var section = PersistentSettings.OpenBulletSettings.GeneralSettings.ConfigSectionOnLoad;
+            var section = OBSettingsService.Settings.GeneralSettings.ConfigSectionOnLoad;
             var uri = string.Empty;
 
             if (selectedConfig.Mode == ConfigMode.DLL)
             {
                 uri = "config/edit/metadata";
+            }
+            else if (selectedConfig.Mode == ConfigMode.Legacy)
+            {
+                uri = section switch
+                {
+                    ConfigSection.Metadata => "config/edit/metadata",
+                    ConfigSection.Readme => "config/edit/readme",
+                    ConfigSection.Settings => "config/edit/settings",
+                    _ => "config/edit/loliscript"
+                };
             }
             else
             {
@@ -284,7 +296,7 @@ namespace OpenBullet2.Pages
                     ConfigSection.LoliCode => selectedConfig.Mode == ConfigMode.CSharp ? "config/edit/code" : "config/edit/lolicode",
                     ConfigSection.Settings => "config/edit/settings",
                     ConfigSection.CSharpCode => "config/edit/code",
-                    _ => throw new NotImplementedException()
+                    _ => "config/edit/metadata"
                 };
             }
 
@@ -312,7 +324,7 @@ namespace OpenBullet2.Pages
                     ms.Seek(0, SeekOrigin.Begin);
 
                     // Upload it to the repo
-                    await ConfigRepo.Upload(ms);
+                    await ConfigRepo.Upload(ms, file.Name);
                 }
 
                 await js.AlertSuccess(Loc["AllDone"], $"{Loc["ConfigsSuccessfullyUploaded"]}: {e.FileCount}");
@@ -348,6 +360,28 @@ namespace OpenBullet2.Pages
             {
                 var fileName = selectedConfig.Metadata.Name.ToValidFileName() + ".opk";
                 await BlazorDownloadFileService.DownloadFile(fileName, await ConfigPacker.Pack(selectedConfig), "application/octet-stream");
+            }
+            catch (Exception ex)
+            {
+                await js.AlertError(ex.GetType().Name, ex.Message);
+                return;
+            }
+        }
+
+        private async Task DownloadAll()
+        {
+            // Only download configs that are not remote
+            var configsToPack = configs.Where(c => !c.IsRemote);
+
+            if (!configsToPack.Any())
+            {
+                return;
+            }
+
+            try
+            {
+                var bytes = await ConfigPacker.Pack(configsToPack);
+                await BlazorDownloadFileService.DownloadFile("configs.zip", bytes, "application/octet-stream");
             }
             catch (Exception ex)
             {

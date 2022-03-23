@@ -9,13 +9,12 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using OpenBullet2.Auth;
-using OpenBullet2.Repositories;
+using OpenBullet2.Core.Repositories;
 using OpenBullet2.Services;
 using RuriLib.Services;
 using System.Globalization;
 using Blazored.LocalStorage;
 using BlazorDownloadFile;
-using OpenBullet2.Helpers;
 using System;
 using System.Threading;
 using OpenBullet2.Logging;
@@ -24,6 +23,11 @@ using System.Net;
 using RuriLib.Providers.UserAgents;
 using RuriLib.Providers.RandomNumbers;
 using System.Threading.Tasks;
+using OpenBullet2.Core;
+using OpenBullet2.Core.Services;
+using OpenBullet2.Repositories;
+using OpenBullet2.Core.Helpers;
+using OpenBullet2.Helpers;
 
 namespace OpenBullet2
 {
@@ -55,7 +59,8 @@ namespace OpenBullet2
             services.AddFileReaderService();
             services.AddBlazorDownloadFile();
             services.AddDbContext<ApplicationDbContext>(options =>
-                options.UseSqlite(Configuration.GetConnectionString("DefaultConnection")));
+                options.UseSqlite(Configuration.GetConnectionString("DefaultConnection"),
+                b => b.MigrationsAssembly("OpenBullet2.Core")));
             
             services.AddScoped<AuthenticationStateProvider, OBAuthenticationStateProvider>();
             services.AddBlazoredLocalStorage();
@@ -69,7 +74,9 @@ namespace OpenBullet2
             services.AddScoped<IGuestRepository, DbGuestRepository>();
             services.AddScoped<IRecordRepository, DbRecordRepository>();
             services.AddScoped<IThemeRepository>(_ => new DiskThemeRepository("wwwroot/css/themes"));
-            services.AddScoped<IConfigRepository>(_ => new DiskConfigRepository("UserData/Configs"));
+            services.AddScoped<IConfigRepository>(service =>
+                new DiskConfigRepository(service.GetService<RuriLibSettingsService>(),
+                "UserData/Configs"));
             services.AddScoped<IWordlistRepository>(service => 
                 new HybridWordlistRepository(service.GetService<ApplicationDbContext>(),
                 "UserData/Wordlists"));
@@ -89,7 +96,8 @@ namespace OpenBullet2
             services.AddSingleton<DataPoolFactoryService>();
             services.AddSingleton<ProxySourceFactoryService>();
             services.AddSingleton(_ => new RuriLibSettingsService("UserData"));
-            services.AddSingleton(_ => new PersistentSettingsService("UserData"));
+            services.AddSingleton(_ => new OpenBulletSettingsService("UserData"));
+            services.AddSingleton<PersistentSettingsService>();
             services.AddSingleton(_ => new PluginRepository("UserData/Plugins"));
             services.AddSingleton<IRandomUAProvider>(_ => new IntoliRandomUAProvider("user-agents.json"));
             services.AddSingleton<IRNGProvider, DefaultRNGProvider>();
@@ -113,9 +121,10 @@ namespace OpenBullet2
                 {
                     options.RequestCultureProviders.Insert(0, new CustomRequestCultureProvider(context =>
                     {
-                        var settingsService = context.RequestServices.GetService<PersistentSettingsService>();
-                        settingsService.UseCultureCookie = false;
-                        return Task.FromResult(new ProviderCultureResult(settingsService.OpenBulletSettings.GeneralSettings.Culture));
+                        var persistentSettings = context.RequestServices.GetService<PersistentSettingsService>();
+                        var obSettings = context.RequestServices.GetService<OpenBulletSettingsService>();
+                        persistentSettings.UseCultureCookie = false;
+                        return Task.FromResult(new ProviderCultureResult(obSettings.Settings.GeneralSettings.Culture));
                     }));
                 }
 
@@ -132,7 +141,8 @@ namespace OpenBullet2
                     new CultureInfo("tr"),
                     new CultureInfo("ro"),
                     new CultureInfo("fa"),
-                    new CultureInfo("ar")
+                    new CultureInfo("ar"),
+                    new CultureInfo("vi")
                 };
 
                 options.DefaultRequestCulture = new RequestCulture("en", "en");
@@ -144,10 +154,12 @@ namespace OpenBullet2
         // This method gets called by the runtime. Use this method to configure the HTTP request pipeline.
         public void Configure(IApplicationBuilder app, IWebHostEnvironment env)
         {
-            var obSettings = app.ApplicationServices.GetService<PersistentSettingsService>().OpenBulletSettings;
+            var obSettings = app.ApplicationServices.GetService<OpenBulletSettingsService>().Settings;
 
             if (RootChecker.IsRoot())
+            {
                 Console.WriteLine(RootChecker.RootWarning);
+            }
 
             if (env.IsDevelopment())
             {
@@ -190,8 +202,10 @@ namespace OpenBullet2
 
             // Load the configs
             var configService = app.ApplicationServices.GetService<ConfigService>();
-            var configRepo = app.ApplicationServices.GetService<IConfigRepository>();
             configService.ReloadConfigs().Wait();
+
+            // Initialize autocompletion
+            AutocompletionProvider.Init(obSettings.GeneralSettings.CustomSnippets);
         }
     }
 }

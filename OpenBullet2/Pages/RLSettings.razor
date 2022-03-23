@@ -1,4 +1,5 @@
 ﻿@page "/settings/rurilib"
+@using RuriLib.Models.Settings
 @using RuriLib.Parallelization 
 @using RuriLib.Functions.Captchas
 @inject Microsoft.Extensions.Localization.IStringLocalizer<RLSettings> Loc
@@ -22,6 +23,13 @@
     <label>@Loc["LogJobActivityToFile"]</label>
     <InputCheckbox class="mb-3" @bind-Value="settings.GeneralSettings.LogJobActivityToFile" />
     <br />
+    
+    @if (settings.GeneralSettings.LogJobActivityToFile)
+    {
+        <label>@Loc["LogAllResults"]</label>
+        <InputCheckbox class="mb-3" @bind-Value="settings.GeneralSettings.LogAllResults" />
+        <br />
+    }
 
     <label>@Loc["EnableBotLogging"]</label>
     <InputCheckbox class="mb-3" @bind-Value="settings.GeneralSettings.EnableBotLogging" />
@@ -169,6 +177,27 @@
             <label>@Loc["2CaptchaApiKey"]</label>
             <InputText class="mb-3" @bind-Value="settings.CaptchaSettings.TwoCaptchaApiKey" />
             break;
+
+        case CaptchaServiceType.NineKW:
+            <label>@Loc["9KWApiKey"]</label>
+            <InputText class="mb-3" @bind-Value="settings.CaptchaSettings.NineKWApiKey" />
+            break;
+
+        case CaptchaServiceType.CustomAntiCaptcha:
+            <label>@Loc["CustomAntiCaptchaApiKey"]</label>
+            <InputText class="mb-3" @bind-Value="settings.CaptchaSettings.CustomAntiCaptchaApiKey" />
+
+            <label>@Loc["CustomAntiCaptchaHost"]</label>
+            <InputText class="mb-3" @bind-Value="settings.CaptchaSettings.CustomAntiCaptchaDomain" />
+
+            <label>@Loc["CustomAntiCaptchaPort"]</label>
+            <InputNumber class="mb-3" @bind-Value="settings.CaptchaSettings.CustomAntiCaptchaPort" />
+            break;
+
+        case CaptchaServiceType.AnyCaptcha:
+            <label>@Loc["AnyCaptchaApiKey"]</label>
+            <InputText class="mb-3" @bind-Value="settings.CaptchaSettings.AnyCaptchaApiKey" />
+            break;
     }
 
     <button class="btn btn-outline-primary" style="margin: 10px 0;" @onclick="CheckBalance">@Loc["CheckBalance"]</button>
@@ -178,6 +207,30 @@
 <EditForm Model="settings.PuppeteerSettings">
     <label>@Loc["ChromeBinaryLocation"]</label>
     <InputText class="mb-3" @bind-Value="settings.PuppeteerSettings.ChromeBinaryLocation" />
+
+    <!--
+    <label>@Loc["DrawMouseMovement"]</label>
+    <InputCheckbox class="mb-3" @bind-Value="settings.PuppeteerSettings.DrawMouseMovement" />
+    <br />
+    -->
+</EditForm>
+
+<h1>@Loc["Selenium"]</h1>
+<EditForm Model="settings.SeleniumSettings">
+    <label>@Loc["BrowserType"]</label>
+    <InputSelect @bind-Value="settings.SeleniumSettings.BrowserType">
+        @foreach (var type in Enum.GetNames(typeof(SeleniumBrowserType)))
+        {
+            <option value="@type">@type</option>
+        }
+    </InputSelect>
+    <br />
+
+    <label>@Loc["ChromeBinaryLocation"]</label>
+    <InputText class="mb-3" @bind-Value="settings.SeleniumSettings.ChromeBinaryLocation" />
+
+    <label>@Loc["FirefoxBinaryLocation"]</label>
+    <InputText class="mb-3" @bind-Value="settings.SeleniumSettings.FirefoxBinaryLocation" />
 
     <!--
     <label>@Loc["DrawMouseMovement"]</label>

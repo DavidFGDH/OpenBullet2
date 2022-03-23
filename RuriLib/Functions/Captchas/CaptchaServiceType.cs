@@ -40,6 +40,15 @@
         SolveRecaptcha,
 
         /// <summary>The service provided by apitruecaptcha.org</summary>
-        TrueCaptcha
+        TrueCaptcha,
+
+        /// <summary>The service provided by 9kw.eu</summary>
+        NineKW,
+
+        /// <summary>A service that implements the anti-captcha API.</summary>
+        CustomAntiCaptcha,
+
+        /// <summary>The service provided by anycaptcha.com</summary>
+        AnyCaptcha
     }
 }

@@ -1,5 +1,6 @@
 ﻿@using System.Globalization
-@inject PersistentSettingsService PersistentSettings 
+@inject PersistentSettingsService PersistentSettings
+@inject OpenBulletSettingsService OBSettingsService
 @inject NavigationManager NavigationManager
 @inject IModalService ModalService 
 
@@ -54,8 +55,8 @@
             <span>فارسی</span>
         </div>
         <div class="col text-center">
-            <img class="culture-flag" @onclick="@(() => ChangeCulture("ar"))" src="images/flags/ar.png" /><br />
-            <span>عربي</span>
+            <img class="culture-flag" @onclick="@(() => ChangeCulture("vi"))" src="images/flags/vi.png" /><br />
+            <span>Tiếng Việt</span>
         </div>
     </div>
 </div>
@@ -78,10 +79,12 @@
         }
         else
         {
-            PersistentSettings.OpenBulletSettings.GeneralSettings.Culture = culture;
+            OBSettingsService.Settings.GeneralSettings.Culture = culture;
 
             if (SaveSettings)
-                await PersistentSettings.Save();
+            {
+                await OBSettingsService.Save();
+            }
 
             CultureInfo.CurrentCulture = new CultureInfo(culture);
             CultureInfo.CurrentUICulture = new CultureInfo(culture);

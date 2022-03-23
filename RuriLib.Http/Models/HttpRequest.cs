@@ -10,16 +10,51 @@ using System.Threading.Tasks;
 
 namespace RuriLib.Http.Models
 {
+    /// <summary>
+    /// An HTTP request that can be sent using a <see cref="RLHttpClient"/>.
+    /// </summary>
     public class HttpRequest : IDisposable
     {
+        /// <summary>
+        /// Whether to write the absolute URI in the first line of the request instead of
+        /// the relative path (e.g. https://example.com/abc instead of /abc)
+        /// </summary>
         public bool AbsoluteUriInFirstLine { get; set; } = false;
+
+        /// <summary>
+        /// The HTTP version to use.
+        /// </summary>
         public Version Version { get; set; } = new(1, 1);
+
+        /// <summary>
+        /// The HTTP method to use.
+        /// </summary>
         public HttpMethod Method { get; set; } = HttpMethod.Get;
+
+        /// <summary>
+        /// The URI of the remote resource.
+        /// </summary>
         public Uri Uri { get; set; }
+
+        /// <summary>
+        /// The cookies to send inside the Cookie header of this request.
+        /// </summary>
         public Dictionary<string, string> Cookies { get; set; } = new();
+
+        /// <summary>
+        /// The headers of this request.
+        /// </summary>
         public Dictionary<string, string> Headers { get; set; } = new();
+
+        /// <summary>
+        /// The content of this request.
+        /// </summary>
         public HttpContent Content { get; set; }
 
+        /// <summary>
+        /// Gets the raw bytes that will be sent on the network stream.
+        /// </summary>
+        /// <param name="cancellationToken">The token to cancel the operation</param>
         public async Task<byte[]> GetBytesAsync(CancellationToken cancellationToken = default)
         {
             using var ms = new MemoryStream();
@@ -78,18 +113,8 @@ namespace RuriLib.Http.Models
                 finalHeaders.Add("Host", Uri.Host);
             }
 
-            // TODO: Implement support for Keep-Alive connections!
-            // If there is already a Connection header
-            if (HeaderExists("Connection", out var connectionHeaderName))
-            {
-                // If its value is Keep-Alive, change it to Close
-                if (Headers[connectionHeaderName].Equals("Keep-Alive", StringComparison.OrdinalIgnoreCase))
-                {
-                    Headers[connectionHeaderName] = "Close";
-                }
-            }
-            // Otherwise, add it
-            else
+            // If there is no Connection header, add it
+            if (!HeaderExists("Connection", out var connectionHeaderName))
             {
                 finalHeaders.Add("Connection", "Close");
             }
@@ -109,6 +134,12 @@ namespace RuriLib.Http.Models
                 {
                     cookieBuilder
                         .Append($"{cookie.Key}={cookie.Value}; ");
+                }
+
+                // Remove the last ; and space if not empty
+                if (cookieBuilder.Length > 2)
+                {
+                    cookieBuilder.Remove(cookieBuilder.Length - 2, 2);
                 }
 
                 finalHeaders.Add("Cookie", cookieBuilder);
@@ -154,6 +185,10 @@ namespace RuriLib.Http.Models
             return sb.ToString();
         }
 
+        /// <summary>
+        /// Checks whether a header that matches a given <paramref name="name"/> exists. If it exists,
+        /// its original name will be written to <paramref name="actualName"/>.
+        /// </summary>
         public bool HeaderExists(string name, out string actualName)
         {
             var key = Headers.Keys.FirstOrDefault(k => k.Equals(name, StringComparison.OrdinalIgnoreCase));
@@ -161,6 +196,7 @@ namespace RuriLib.Http.Models
             return key != null;
         }
 
+        /// <inheritdoc/>
         public void Dispose() => Content?.Dispose();
     }
 }

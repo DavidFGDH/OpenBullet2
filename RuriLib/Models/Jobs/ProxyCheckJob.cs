@@ -133,50 +133,67 @@ namespace RuriLib.Models.Jobs
         #region Controls
         public override async Task Start()
         {
-            if (Proxies == null)
-                throw new NullReferenceException("The proxy list cannot be null");
+            if (Status is JobStatus.Starting or JobStatus.Running)
+                throw new Exception("Job already started");
 
-            if (ProxyOutput == null)
-                throw new NullReferenceException("The proxy check output cannot be null");
+            try
+            {
+                Status = JobStatus.Starting;
 
-            if (Url == null)
-                throw new NullReferenceException("The url cannot be null");
+                if (Proxies == null)
+                    throw new NullReferenceException("The proxy list cannot be null");
 
-            if (SuccessKey == null)
-                throw new NullReferenceException("The success key cannot be null");
+                if (ProxyOutput == null)
+                    throw new NullReferenceException("The proxy check output cannot be null");
 
-            var proxies = CheckOnlyUntested 
-                ? Proxies.Where(p => p.WorkingStatus == ProxyWorkingStatus.Untested)
-                : Proxies;
+                if (Url == null)
+                    throw new NullReferenceException("The url cannot be null");
 
-            // Update the stats
-            Total = proxies.Count();
-            Tested = proxies.Count(p => p.WorkingStatus != ProxyWorkingStatus.Untested);
-            Working = proxies.Count(p => p.WorkingStatus == ProxyWorkingStatus.Working);
-            NotWorking = proxies.Count(p => p.WorkingStatus == ProxyWorkingStatus.NotWorking);
+                if (SuccessKey == null)
+                    throw new NullReferenceException("The success key cannot be null");
 
-            if (!proxies.Any())
-                throw new Exception("No proxies provided to check");
+                var proxies = CheckOnlyUntested
+                    ? Proxies.Where(p => p.WorkingStatus == ProxyWorkingStatus.Untested)
+                    : Proxies;
 
-            // Wait for the start condition to be verified
-            await base.Start();
+                // Update the stats
+                Total = proxies.Count();
+                Tested = proxies.Count(p => p.WorkingStatus != ProxyWorkingStatus.Untested);
+                Working = proxies.Count(p => p.WorkingStatus == ProxyWorkingStatus.Working);
+                NotWorking = proxies.Count(p => p.WorkingStatus == ProxyWorkingStatus.NotWorking);
 
-            var workItems = proxies.Select(p => new ProxyCheckInput(p, Url, SuccessKey, Timeout, GeoProvider));
-            parallelizer = ParallelizerFactory<ProxyCheckInput, Proxy>
-                .Create(settings.RuriLibSettings.GeneralSettings.ParallelizerType, workItems, 
-                workFunction, Bots, Proxies.Count(), 0, BotLimit);
+                if (!proxies.Any())
+                    throw new Exception("No proxies provided to check");
 
-            parallelizer.NewResult += UpdateProxy;
-            parallelizer.StatusChanged += StatusChanged;
-            parallelizer.TaskError += PropagateTaskError;
-            parallelizer.Error += PropagateError;
-            parallelizer.NewResult += PropagateResult;
-            parallelizer.Completed += PropagateCompleted;
+                // Wait for the start condition to be verified
+                await base.Start();
 
-            ResetStats();
-            StartTimer();
-            logger?.LogInfo(Id, "All set, starting the execution");
-            await parallelizer.Start();
+                var workItems = proxies.Select(p => new ProxyCheckInput(p, Url, SuccessKey, Timeout, GeoProvider));
+                parallelizer = ParallelizerFactory<ProxyCheckInput, Proxy>
+                    .Create(settings.RuriLibSettings.GeneralSettings.ParallelizerType, workItems,
+                    workFunction, Bots, Proxies.Count(), 0, BotLimit);
+
+                parallelizer.NewResult += UpdateProxy;
+                parallelizer.ProgressChanged += PropagateProgress;
+                parallelizer.StatusChanged += StatusChanged;
+                parallelizer.TaskError += PropagateTaskError;
+                parallelizer.Error += PropagateError;
+                parallelizer.NewResult += PropagateResult;
+                parallelizer.Completed += PropagateCompleted;
+
+                ResetStats();
+                StartTimer();
+                logger?.LogInfo(Id, "All set, starting the execution");
+                await parallelizer.Start();
+            }
+            finally
+            {
+                // Reset the status
+                if (Status == JobStatus.Starting)
+                {
+                    Status = JobStatus.Idle;
+                }
+            }
         }
 
         public override async Task Stop()
@@ -238,33 +255,33 @@ namespace RuriLib.Models.Jobs
         #endregion
 
         #region Propagation of TaskManager events
-        private void PropagateTaskError(object sender, ErrorDetails<ProxyCheckInput> details)
+        private void PropagateTaskError(object _, ErrorDetails<ProxyCheckInput> details)
         {
-            OnTaskError?.Invoke(sender, details);
+            OnTaskError?.Invoke(this, details);
             logger?.LogException(Id, details.Exception);
         }
 
-        private void PropagateError(object sender, Exception ex)
+        private void PropagateError(object _, Exception ex)
         {
-            OnError?.Invoke(sender, ex);
+            OnError?.Invoke(this, ex);
             logger?.LogException(Id, ex);
         }
 
-        private void PropagateResult(object sender, ResultDetails<ProxyCheckInput, Proxy> result)
+        private void PropagateResult(object _, ResultDetails<ProxyCheckInput, Proxy> result)
         {
-            OnResult?.Invoke(sender, result);
+            OnResult?.Invoke(this, result);
             // We're not logging results to the IJobLogger because they could arrive at a very high rate
             // and not be very useful, we're mostly interested in errors here.
         }
 
-        private void PropagateProgress(object sender, float progress)
+        private void PropagateProgress(object _, float progress)
         {
-            OnProgress?.Invoke(sender, progress);
+            OnProgress?.Invoke(this, progress);
         }
 
-        private void PropagateCompleted(object sender, EventArgs e)
+        private void PropagateCompleted(object _, EventArgs e)
         {
-            OnCompleted?.Invoke(sender, e);
+            OnCompleted?.Invoke(this, e);
             logger?.LogInfo(Id, "Execution completed");
         }
         #endregion

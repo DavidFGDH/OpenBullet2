@@ -14,9 +14,9 @@ using Microsoft.Extensions.Primitives;
 using OpenBullet2.Auth;
 using OpenBullet2.Components;
 using OpenBullet2.DTOs;
-using OpenBullet2.Entities;
+using OpenBullet2.Core.Entities;
 using OpenBullet2.Helpers;
-using OpenBullet2.Repositories;
+using OpenBullet2.Core.Repositories;
 using OpenBullet2.Services;
 using OpenBullet2.Shared.Forms;
 using RuriLib.Models.Jobs;
@@ -27,6 +27,8 @@ using System.Globalization;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using OpenBullet2.Core.Helpers;
+using OpenBullet2.Core.Services;
 
 namespace OpenBullet2.Pages
 {
@@ -47,6 +49,8 @@ namespace OpenBullet2.Pages
         private List<ProxyEntity> proxies = new();
         private int maxPing = 5000;
         private int uid = -1;
+        private int WorkingProxies => proxies.Count(p => p.Status == ProxyWorkingStatus.Working);
+        private int NotWorkingProxies => proxies.Count(p => p.Status == ProxyWorkingStatus.NotWorking);
 
         private GridComponent<ProxyEntity> gridComponent;
         private CGrid<ProxyEntity> grid;
@@ -77,7 +81,7 @@ namespace OpenBullet2.Pages
                 c.Add(p => p.Country).Titled(Loc["Country"]);
                 c.Add(p => p.Status).Titled(Loc["Status"]);
                 c.Add(p => p.Ping).Titled(Loc["Ping"]);
-                c.Add(p => p.LastChecked).Titled(Loc["LastChecked"]);
+                c.Add(p => p.LastChecked).Titled(Loc["LastChecked"]).SetFilterWidgetType("DateTimeLocal").Format("{0:dd/MM/yyyy HH:mm}");
             };
 
             var query = new QueryDictionary<StringValues>();
