@@ -19,7 +19,7 @@ namespace RuriLib.Blocks.Selenium.Browser
     public static class Methods
     {
         [Block("Opens a new selenium browser", name = "Open Browser")]
-        public static void SeleniumOpenBrowser(BotData data)
+        public static void SeleniumOpenBrowser(BotData data, string extraCmdLineArgs = "")
         {
             data.Logger.LogHeader();
 
@@ -32,6 +32,7 @@ namespace RuriLib.Blocks.Selenium.Browser
             }
 
             var provider = data.Providers.SeleniumBrowser;
+            var args = string.Empty;
 
             switch (provider.BrowserType)
             {
@@ -46,7 +47,11 @@ namespace RuriLib.Blocks.Selenium.Browser
 
                     if (Utils.IsDocker())
                     {
-                        chromeop.AddArgument("--no-sandbox");
+                        if (RootChecker.IsRoot())
+                        {
+                            chromeop.AddArgument("--no-sandbox");
+                        }
+                        
                         chromeop.AddArgument("--whitelisted-ips=''");
                         chromeop.AddArgument("--disable-dev-shm-usage");
                     }
@@ -61,9 +66,17 @@ namespace RuriLib.Blocks.Selenium.Browser
                         chromeop.AddArgument("--disable-notifications");
                     }
 
-                    if (!string.IsNullOrWhiteSpace(data.ConfigSettings.BrowserSettings.CommandLineArgs))
+                    args = data.ConfigSettings.BrowserSettings.CommandLineArgs;
+
+                    if (!string.IsNullOrWhiteSpace(args))
                     {
-                        chromeop.AddArgument(data.ConfigSettings.BrowserSettings.CommandLineArgs);
+                        // Extra command line args (to have dynamic args via variables)
+                        if (!string.IsNullOrWhiteSpace(extraCmdLineArgs))
+                        {
+                            args += ' ' + extraCmdLineArgs;
+                        }
+
+                        chromeop.AddArgument(args);
                     }
 
                     if (data.UseProxy)
@@ -100,9 +113,17 @@ namespace RuriLib.Blocks.Selenium.Browser
                         fireprofile.SetPreference("dom.webnotifications.enabled", false);
                     }
 
-                    if (!string.IsNullOrWhiteSpace(data.ConfigSettings.BrowserSettings.CommandLineArgs))
+                    args = data.ConfigSettings.BrowserSettings.CommandLineArgs;
+
+                    if (!string.IsNullOrWhiteSpace(args))
                     {
-                        fireop.AddArgument(data.ConfigSettings.BrowserSettings.CommandLineArgs);
+                        // Extra command line args (to have dynamic args via variables)
+                        if (!string.IsNullOrWhiteSpace(extraCmdLineArgs))
+                        {
+                            args += ' ' + extraCmdLineArgs;
+                        }
+
+                        fireop.AddArgument(args);
                     }
 
                     if (data.UseProxy)
@@ -146,6 +167,7 @@ namespace RuriLib.Blocks.Selenium.Browser
             data.Logger.LogHeader();
 
             var browser = GetBrowser(data);
+            browser.Close();
             browser.Quit();
             data.SetObject("selenium", null);
             data.Logger.Log("Browser closed successfully!", LogColors.JuneBud);
